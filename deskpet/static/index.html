@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="day">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>奶龙桌宠</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="browser-backdrop" aria-hidden="true"><span>LOCAL DESK PET</span><i></i><i></i><i></i></div>
+  <main id="petScene" class="pet-scene">
+    <section id="panel" class="panel" aria-label="交付清单" hidden>
+      <header class="panel-header">
+        <div><span class="eyebrow">MY LITTLE COMPANION</span><h1>今天也一起完成吧</h1></div>
+        <button id="closePanel" class="icon-button" aria-label="收起清单">×</button>
+      </header>
+      <nav class="panel-tabs" aria-label="桌宠功能">
+        <button class="active" data-view="notice">通知</button>
+        <button data-view="todos">清单 <span id="todoCount">0</span></button>
+        <button data-view="game">小游戏</button>
+        <button data-view="settings">设置</button>
+        <button data-view="about">关于</button>
+      </nav>
+      <div class="growth-strip">
+        <strong id="panelDays">认识你的第 1 天</strong>
+        <div><button data-simulate="7">第 7 天</button><button data-simulate="30">第 30 天</button><button data-simulate="100">第 100 天</button><button id="clearSimulation">真实</button></div>
+      </div>
+      <div class="panel-content">
+        <section id="noticeView" class="view active">
+          <div class="section-title"><div><h2>贴通知，拆成对照卡</h2><p>样例只填文本，不会替你写库。</p></div><span class="soft-badge">本地</span></div>
+          <div id="noticeSamples" class="notice-samples" aria-label="五条样例通知"></div>
+          <textarea id="noticeText" rows="5" placeholder="把课程通知、作业要求贴在这里…"></textarea>
+          <div class="primary-actions"><button id="parseNotice" class="primary">拆成清单</button><button id="clearNotice" class="secondary">清空</button></div>
+          <div id="parseStatus" class="status-text" role="status"></div>
+          <div id="checklist" class="checklist"></div>
+          <div class="primary-actions"><button id="confirmChecklist" class="primary" disabled>确认落待办</button><button id="exportDocx" class="secondary">导出 docx</button></div>
+          <div id="exportResult" class="status-text"></div>
+        </section>
+        <section id="todosView" class="view">
+          <div class="section-title"><div><h2>逐条交付</h2><p>勾选完成，下次打开还会记得。</p></div></div>
+          <div id="todoList" class="todo-list"></div>
+          <details class="manual-add"><summary>手动补一条</summary><input id="todoTitle" placeholder="要做什么"><input id="todoDeadline" type="datetime-local"><input id="todoGap" placeholder="还差什么"><button id="addTodo" class="primary">添加</button></details>
+          <div id="catchupSummary" class="catchup-summary"></div>
+        </section>
+        <section id="gameView" class="view">
+          <div class="section-title"><div><h2>奶龙玩贪吃蛇</h2><p>实时操作只走确定性规则；复盘优先。</p></div></div>
+          <canvas id="gameCanvas" width="240" height="240" aria-label="贪吃蛇棋盘"></canvas>
+          <div class="primary-actions"><button id="startGame" class="primary">开始一局</button><button id="finishGame" class="secondary" disabled>结束并复盘</button></div>
+          <label class="switch-row"><span>按需解说（默认关闭）</span><input id="commentaryEnabled" type="checkbox"></label>
+          <button id="requestCommentary" class="secondary wide" disabled>让奶龙说一句</button>
+          <div id="gameLog" class="game-log">还没开局，不会自动调用解说。</div>
+        </section>
+        <section id="settingsView" class="view">
+          <div class="section-title"><div><h2>模型与本机设置</h2><p>没有 Key 也能完整使用规则版。</p></div></div>
+          <label class="field-label">模型开关<select id="modelSwitch"><option value="off">关 · 永远规则版</option><option value="auto">自动 · 有 Key 才启用</option><option value="on">开 · 强制模型</option></select></label>
+          <div class="key-card"><span>DeepSeek Key</span><strong id="keyStatus">未配置</strong><small id="keyDetail">只显示脱敏尾四位，明文不会进入此页面。</small><div><button id="changeKey" class="secondary">配置 / 修改</button><button id="checkKey" class="secondary">一键检查</button><button id="deleteKey" class="danger">删除</button></div></div>
+          <div id="keyCheckResult" class="status-text"></div>
+          <label class="switch-row"><span>窗口置顶</span><input id="alwaysOnTop" type="checkbox" checked></label>
+          <label class="switch-row"><span>通知静音</span><input id="muted" type="checkbox"></label>
+          <label class="switch-row"><span>夜间主题</span><input id="nightTheme" type="checkbox"></label>
+          <button id="testNotification" class="secondary wide">测试系统通知</button>
+          <button id="zoomPet" class="secondary wide">演示放大 / 还原</button>
+        </section>
+        <section id="aboutView" class="view about-view">
+          <h2>关于这只奶龙</h2>
+          <p>一个角色、一个桌面角落。这里的清单和提醒都由本地功能完成，不提供通用问答或联网搜索。</p>
+          <h3>图像素材署名</h3>
+          <p>素材与动作表来源：<a href="https://github.com/zhangkk833-byte/dsh-nailong-pet" data-external>zhangkk833-byte/dsh-nailong-pet</a>；上游图像：<a href="https://github.com/Maple498/nai-wa-codex-pet" data-external>Maple498/nai-wa-codex-pet</a>（Codex Pet v2）。</p>
+          <p>图像采用 <a href="https://creativecommons.org/licenses/by/4.0/" data-external>CC BY 4.0</a>。本项目原样使用已切分的 74 张 PNG 与 13 组动作表，未改帧、未补帧、未调色、未修改像素；仅编写本地交互与播放代码。</p>
+          <p class="rights-note">上游不保证“奶龙”原型涉及的形象权、商标权或其他第三方权利；本项目不宣称该形象为原创。完整授权说明见随附 ASSET-LICENSE.md。</p>
+        </section>
+      </div>
+    </section>
+
+    <section id="bubble" class="bubble" aria-live="polite">
+      <div class="bubble-top"><span id="daysBadge">认识你的第 1 天</span><span id="stageText">初识</span></div>
+      <p id="bubbleText">今天刚认识，点我一下，贴条通知试试。</p>
+      <small id="bubbleNote"></small>
+      <ol id="decisionChain" class="decision-chain"></ol>
+      <div id="keyPrompt" class="key-prompt" hidden><span>想让我读得更准吗？给我一把钥匙就行。</span><div><button id="configureKey">去配置</button><button id="laterKey">以后再说</button></div></div>
+    </section>
+
+    <canvas id="petCanvas" class="pet-canvas" width="192" height="208" tabindex="0" role="button" aria-label="奶龙，点击展开清单，拖拽移动，右键更多操作"></canvas>
+    <div id="toast" class="toast" role="status"></div>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
