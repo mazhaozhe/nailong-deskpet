@@ -26,7 +26,7 @@
     2. 用户隔离口径：访问口令管「能不能进门」+ 前端 localStorage UUID 管「你是谁」，
        两层分开。口令泄露换一个不影响数据归属；UUID 丢了数据找不回（demo 可接受）。
        见 auth.py。
-    3. 模型调用路径 = 方案 B：复用 agent.models.ModelManager 的模型层与纯函数护栏，
+    3. 模型调用路径 = 方案 B：复用 shared.models.ModelManager 的模型层与纯函数护栏，
        model.with_structured_output(Schema).ainvoke()，**不构造 ReAct Agent**；
        因此桌宠进程不注册任何工具，run_shell 从源头不出现。
        依据与护栏复用矩阵见 tools_allowlist.py 顶部说明；公网三层限流须在 Web 层自补。

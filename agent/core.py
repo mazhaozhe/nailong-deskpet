@@ -29,11 +29,11 @@ from langchain.agents.middleware import (
 )
 from langchain_deepseek import ChatDeepSeek
 
-from agent import token_tracker as tt
-from agent.config import settings
-from agent.observability import log_step
+from shared import token_tracker as tt
+from shared.config import settings
+from shared.observability import log_step
 from agent.prompts import SYSTEM_PROMPT
-from memory.cache import enable_llm_cache
+from shared.cache import enable_llm_cache
 from memory.rag import build_rag_tools
 from middleware.rate_limit import RateLimitMiddleware
 from tools.registry import all_tools, suggest_tools
@@ -111,7 +111,7 @@ def build_checkpointer():
 def _build_checkpointer():
     """创建 SQLite checkpointer。失败时降级为 None（无记忆但可运行）。"""
     db = settings.abs_path(settings.checkpoint_db)
-    # main.py 通过 asyncio 异步流式调用，必须用异步 checkpointer，
+    # agent/__main__.py 通过 asyncio 异步流式调用，必须用异步 checkpointer，
     # 同步的 SqliteSaver 会抛 NotImplementedError
     try:
         import aiosqlite
@@ -133,7 +133,7 @@ def _build_checkpointer():
 # ---------------------------------------------------------------------------
 def build_model(use_reasoner: bool = False) -> ChatDeepSeek:
     """构造 DeepSeek 模型实例。use_reasoner=True 时切深度推理模型。"""
-    from agent.models import anti_degeneration_kwargs      # 局部导入，避免成环
+    from shared.models import anti_degeneration_kwargs      # 局部导入，避免成环
 
     name = settings.reasoner_model if use_reasoner else settings.main_model
     return ChatDeepSeek(

@@ -1,5 +1,5 @@
 """
-main.py —— 程序入口（CLI 对话）
+agent/__main__.py —— 程序入口（CLI 对话）
 ================================
 启动流程：
     1. 加载配置并校验（缺 API Key 给出明确指引后退出）
@@ -18,12 +18,12 @@ import asyncio
 import sys
 
 import agent.api as api
-from agent import token_tracker as tt
-from agent.config import settings
+from shared import token_tracker as tt
+from shared.config import settings
 from agent.core import close_checkpointers
-from agent.models import (ModelBuildError, ModelConfigError,
+from shared.models import (ModelBuildError, ModelConfigError,
                           ModelNotFoundError, ModelSwitchError)
-from agent.observability import log_step, setup_logging, stream_run
+from shared.observability import log_step, setup_logging, stream_run
 from agent.ui import console, open_trace_file
 from memory.rag import availability as rag_availability
 from tools.registry import all_tools

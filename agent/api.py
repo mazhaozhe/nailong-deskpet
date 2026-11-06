@@ -10,7 +10,7 @@ agent/api.py —— 对外统一接口（门面 / Facade）
     - 切换后无需重启生效     → 内部走 AgentRuntime 热切换
     - 查看当前模型           → current_model()
     - 改完目录热重载         → reload_models()
-    - 错误处理               → 抛出 agent.models 里的语义化异常
+    - 错误处理               → 抛出 shared.models 里的语义化异常
     - 可扩展                 → register_provider() / 编辑 config/models.json
 
 典型用法（CLI 或 Web 后端里）：
@@ -27,7 +27,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from agent.models import ModelSpec  # noqa: F401  （供调用方构造新模型用）
+from shared.models import ModelSpec  # noqa: F401  （供调用方构造新模型用）
 from agent.runtime import AgentRuntime
 
 _runtime: Optional[AgentRuntime] = None

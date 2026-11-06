@@ -1,5 +1,5 @@
 """
-tests/test_history_repair.py —— "孤儿 tool_calls" 历史修复的单元测试
+tests/agent/test_history_repair.py —— "孤儿 tool_calls" 历史修复的单元测试
 ==================================================================
 覆盖 agent/history_repair.py：
 - find_orphans：各种消息组合下的删除集合（只删不增、一遍收敛）

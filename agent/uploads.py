@@ -13,7 +13,7 @@ agent/uploads.py —— 客户端附件上传（文件 / 照片）
 设计要点：
     - 暂存与归档分离：用户加了附件又删掉，不会在会话目录里留垃圾；
     - 所有落盘文件名都加 upload_id 前缀，避免同名覆盖与路径穿越；
-    - 扩展名白名单 + 大小上限（agent/config.py：upload_max_mb）。
+    - 扩展名白名单 + 大小上限（shared/config.py：upload_max_mb）。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from agent.config import settings
+from shared.config import settings
 
 # ---------------------------------------------------------------------------
 # 分类表

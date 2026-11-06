@@ -1,5 +1,5 @@
 """
-tests/test_search.py —— 联网搜索工具测试
+tests/agent/test_search.py —— 联网搜索工具测试
 ========================================
 覆盖 tools/search.py 的多源级联与熔断冷却（全部 mock 网络，不真实联网）：
 

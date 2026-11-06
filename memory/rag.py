@@ -14,8 +14,8 @@ Agent 其余功能完全不受影响 —— 这是"错误处理"要求在模块�
 
 from pathlib import Path
 
-from agent.config import settings
-from agent.observability import log_step
+from shared.config import settings
+from shared.observability import log_step
 
 # ---------------------------------------------------------------------------
 # 依赖探测：chroma 未安装时优雅降级

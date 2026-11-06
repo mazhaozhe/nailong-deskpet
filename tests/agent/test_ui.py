@@ -1,5 +1,5 @@
 """
-tests/test_ui.py —— 过程框 UI 的单元测试
+tests/agent/test_ui.py —— 过程框 UI 的单元测试
 =========================================
 覆盖 agent/ui.py 的纯逻辑部分：
 - shorten：框内单行截断
@@ -188,7 +188,7 @@ class TestTraceLog:
 # ---------------------------------------------------------------------------
 class TestRunUI:
     def _run(self, tmp_path: Path, monkeypatch, answer: str) -> str:
-        from agent.config import settings
+        from shared.config import settings
         trace_path = tmp_path / "trace.log"
         monkeypatch.setattr(settings, "trace_file", str(trace_path))
 
@@ -218,7 +218,7 @@ class TestRunUI:
         assert "✔ 工具 calc 返回" in text
 
     def test_fail_writes_error(self, tmp_path, monkeypatch):
-        from agent.config import settings
+        from shared.config import settings
         trace_path = tmp_path / "trace.log"
         monkeypatch.setattr(settings, "trace_file", str(trace_path))
         ui = RunUI("s", "问题")

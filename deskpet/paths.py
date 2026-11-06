@@ -1,7 +1,7 @@
 """deskpet.paths —— 用户数据目录单一入口（v6.1 裁决）
 
 为什么必须有这个模块：
-    导出文件曾被放在 deskpet/static/exports/（被 mount 的静态根），
+    导出文件曾被放在 desktop/renderer/exports/（被 mount 的静态根），
     /static/exports/{fname} 直接 200，旁路了 /exports 的白名单三道闩
     （Step 0-2）。修复后导出目录、LLM 缓存 db、本地成本累计、三态
     settings 全部统一落用户数据目录，路径拼接只许走本模块，别各写一份。
@@ -15,7 +15,7 @@
        - Windows: %LOCALAPPDATA%\\naiwa-deskpet（不写死盘符/字面量）
        - 其它:    $XDG_DATA_HOME/naiwa-deskpet 或 ~/.local/share/naiwa-deskpet
 
-阶段 3 只做「可注入 + 默认值」，不接 Electron、不改 client/main.js。
+阶段 3 只做「可注入 + 默认值」，不接 Electron、不改 desktop/main.js。
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def get_data_dir() -> Path:
 
 
 def get_exports_dir() -> Path:
-    """导出 docx 落这里（绝不放 deskpet/static/ 下，防静态根旁路）。"""
+    """导出 docx 落这里（绝不放 desktop/renderer/ 下，防静态根旁路）。"""
     d = get_data_dir() / "exports"
     d.mkdir(parents=True, exist_ok=True)
     return d

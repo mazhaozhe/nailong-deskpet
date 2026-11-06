@@ -1,5 +1,5 @@
 """
-agent/token_tracker.py —— Token 用量统计与预估
+shared/token_tracker.py —— Token 用量统计与预估
 ================================================
 两个核心功能（对标 WorkBuddy 的 token 显示）：
 
@@ -30,7 +30,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-from agent.observability import log_step
+from shared.observability import log_step
 
 # ---------------------------------------------------------------------------
 # 常量：估算系数（DeepSeek 官方口径的近似）

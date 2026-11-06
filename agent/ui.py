@@ -273,7 +273,7 @@ class RunUI:
     """
 
     def __init__(self, thread_id: str, message: str, max_lines: int | None = None):
-        from agent.config import settings
+        from shared.config import settings
         if max_lines is None:
             max_lines = settings.process_box_lines
         self.box = ProcessBox(max_lines)
@@ -365,7 +365,7 @@ def open_trace_file() -> Path:
     打开过程日志：Windows 用默认程序（记事本，可滚动），
     其他平台打印路径。返回日志路径。
     """
-    from agent.config import settings
+    from shared.config import settings
     path = settings.abs_path(settings.trace_file)
     if not path.exists():
         print("  还没有过程记录。先问一个问题，再来 /trace。")

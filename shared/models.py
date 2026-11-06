@@ -1,5 +1,5 @@
 """
-agent/models.py —— 模型管理器（多模型灵活切换的核心）
+shared/models.py —— 模型管理器（多模型灵活切换的核心）
 ======================================================
 职责：
     1. 维护一份"可用模型目录"（ModelSpec 列表），支持从 JSON 动态加载 / 热重载；
@@ -23,8 +23,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from agent.config import settings
-from agent.observability import log_step
+from shared.config import settings
+from shared.observability import log_step
 
 
 # ---------------------------------------------------------------------------
@@ -246,12 +246,12 @@ def _guess_vision(model_id: str, patterns: list[str] | None = None) -> bool:
     """
     从模型名猜测是否支持图片（多模态）输入。
 
-    命中 vision_patterns（见 agent/config.py）任一子串即视为支持，
+    命中 vision_patterns（见 shared/config.py）任一子串即视为支持，
     覆盖 qwen-vl-plus / moonshot-v1-*-vision / gpt-4o / gemini / claude-3 等
     常见命名。patterns 传 None 时用配置里的默认列表；目录里显式声明的
     supports_vision 始终优先（ModelSpec 字段本身即最终值）。
     """
-    from agent.config import settings   # 延迟导入，避免模块加载顺序问题
+    from shared.config import settings   # 延迟导入，避免模块加载顺序问题
 
     words = patterns if patterns is not None else settings.vision_pattern_list
     low = model_id.lower()

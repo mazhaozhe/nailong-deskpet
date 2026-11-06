@@ -1,1 +1,1 @@
-"""agent 包：Agent 组装、配置、可观测输出与 Prompt。"""
+"""通用命令行 Agent；使用 python -m agent 启动。"""

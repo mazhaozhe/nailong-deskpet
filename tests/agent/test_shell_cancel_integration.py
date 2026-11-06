@@ -1,5 +1,5 @@
 """
-tests/test_shell_cancel_integration.py —— 「停止任务杀进程树」全链路测试
+tests/agent/test_shell_cancel_integration.py —— 「停止任务杀进程树」全链路测试
 =====================================================================
 复现用户截图场景：模型发起 run_shell（长命令执行中）→ 用户点「停止」
 → 取消必须迅速生效（不能干等 timeout），且杀掉整棵进程树。

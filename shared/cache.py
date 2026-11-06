@@ -1,5 +1,5 @@
 """
-memory/cache.py —— 缓存层（重复信息不重复花钱）
+shared/cache.py —— 缓存层（重复信息不重复花钱）
 ================================================
 两层缓存，对应需求"我这个 agent 要学会对重复的信息进行缓存调用"：
 
@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from agent.observability import log_step
+from shared.observability import log_step
 
 
 # ---------------------------------------------------------------------------

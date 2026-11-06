@@ -1,5 +1,5 @@
 """
-tests/test_coding_tools.py —— 代码开发工具测试
+tests/agent/test_coding_tools.py —— 代码开发工具测试
 ===============================================
 用 pytest 的 tmp_path 临时目录测试文件读写/编辑/命令执行，
 不污染真实文件系统。

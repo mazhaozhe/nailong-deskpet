@@ -14,7 +14,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from agent.config import settings
+from shared.config import settings
 from agent.ui import RunUI, extract_answer
 
 

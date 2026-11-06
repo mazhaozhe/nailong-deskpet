@@ -2,7 +2,7 @@
 
 brief 第七节硬约束（v5 · P0-5 拍板 = 方案 A 隔离导入口径）：
     - 桌宠不构造 ReAct Agent、**不注册任何工具**；模型调用（阶段 3）走
-      agent.models.ModelManager 取 chat model + with_structured_output()
+      shared.models.ModelManager 取 chat model + with_structured_output()
     - gen_docx 复用方式改为：markdown→docx 逻辑抽成 deskpet/docx_gen.py
       纯函数（P0-5 选 A）。理由：from tools.documents import gen_docx 会先
       执行 tools/__init__.py → import tools.coding → run_shell 模块被拖进
@@ -26,7 +26,7 @@ brief 第七节硬约束（v5 · P0-5 拍板 = 方案 A 隔离导入口径）：
 
 实现阶段（模型调用路径，阶段 3 生效）：桌宠**不构造 ReAct Agent、
 不注册任何工具**，模型调用走
-agent.models.ModelManager 的 chat model + with_structured_output()。
+shared.models.ModelManager 的 chat model + with_structured_output()。
 本白名单与 filter_tools_for_deskpet() 保留为配置层的禁用清单与自检依据；
 若将来真引入 Agent/工具机制，必须在实际传给 create_agent 的集合上
 调用 assert_no_forbidden()（「先全注册再筛」不足以证明安全）。
@@ -55,7 +55,7 @@ ALLOWED_DESKPET_TOOLS: set[str] = {
 #   撞白名单红线；且 SYSTEM_PROMPT 要求自由文本、TodoList/Summarization/checkpointer
 #   都面向通用任务对话，与「固定 JSON schema、单次调用」不对口。
 # 落地：
-#   1) 模型实例从 agent.models.ModelManager(config/models.json) + init_default()
+#   1) 模型实例从 shared.models.ModelManager(config/models.json) + init_default()
 #      取 current_model（LangChain chat model）。不调 api.init_runtime()——
 #      它会构造 AgentRuntime → build_agent() → 注册全部工具。
 #   2) 调用用 model.with_structured_output(Schema).ainvoke() 或 .ainvoke()

@@ -1,5 +1,5 @@
 """
-tests/test_cache_and_config.py —— 缓存与配置测试
+tests/shared/test_cache_and_config.py —— 缓存与配置测试
 =================================================
 1. TTL 缓存：命中 / 过期 / 参数区分；
 2. 配置：默认值加载 + 缺 Key 时的启动校验提示。
@@ -7,8 +7,8 @@ tests/test_cache_and_config.py —— 缓存与配置测试
 
 import time
 
-from memory.cache import TTLCache, cached
-from agent.config import Settings
+from shared.cache import TTLCache, cached
+from shared.config import Settings
 
 
 # ---------------------------------------------------------------------------

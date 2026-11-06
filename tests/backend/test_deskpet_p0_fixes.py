@@ -1,4 +1,4 @@
-"""tests/test_deskpet_p0_fixes.py —— 阶段 2 返工五项 P0 + 阶段 3 Step 0 验收测试
+"""tests/backend/test_deskpet_p0_fixes.py —— 阶段 2 返工五项 P0 + 阶段 3 Step 0 验收测试
 
 P0-1 下载链路：200 + docx content-type + bytes>0；穿越/非白名单名 404
 P0-2 deadline 落库：贴「11/8 23:59 前提交博客」→ 待办 deadline 精确；

@@ -1,7 +1,7 @@
 """deskpet.settings —— 三态开关 + 成本上限（settings.json）
 
 v6.1 §4.7【A+B】三态开关（全局生效）：
-    - off  关：纯规则、零调用、懒加载，不 import langchain / agent.models；
+    - off  关：纯规则、零调用、懒加载，不 import langchain / shared.models；
     - auto 自动（默认）：探测到 Key（阶段 3 = 注入环境变量，附录 B）才启用，
       无 Key / Key 失效 / 断网时静默降级规则版并如实标注 degraded；
     - on   开：强制模型，失败给明确原因（401 / 余额 / 网络分别报），不假装成功。

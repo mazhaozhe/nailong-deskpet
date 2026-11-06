@@ -10,7 +10,7 @@ tools/mcp_client.py —— MCP 工具接入（可选扩展）
 未安装时 import_mcp() 返回 False，Agent 主流程完全不受影响。
 """
 
-from agent.observability import log_step
+from shared.observability import log_step
 
 # 探测可选依赖是否可用
 try:

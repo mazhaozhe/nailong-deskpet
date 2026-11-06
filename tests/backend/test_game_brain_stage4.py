@@ -1,4 +1,4 @@
-"""tests/test_game_brain_stage4.py —— 阶段 4 游戏大脑补齐验收（不接真实 API）
+"""tests/backend/test_game_brain_stage4.py —— 阶段 4 游戏大脑补齐验收（不接真实 API）
 
 覆盖施工指令 §2-⑤ 的验收项：
   - start(brain_level=2) → strategy → review → memory 一局跑通；关态同样跑完；
@@ -8,15 +8,15 @@
   - 解说在关态回落静态台词且 degraded=true；
   - 固定种子 + 关模型仍能玩完一局（纯规则实时层）。
 
-假 Key / FakeModel 口径同 tests/test_deskpet_llm.py，绝不发真实请求。
-运行：python -m pytest tests/test_game_brain_stage4.py -q
+假 Key / FakeModel 口径同 tests/backend/test_deskpet_llm.py，绝不发真实请求。
+运行：python -m pytest tests/backend/test_game_brain_stage4.py -q
 """
 
 from __future__ import annotations
 
 import pytest
 
-from tests.test_deskpet_llm import (
+from tests.backend.test_deskpet_llm import (
     FakeModel,
     _client,
     _inject_key,

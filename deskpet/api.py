@@ -307,7 +307,7 @@ async def task_qa(req: TaskQARequest, request: Request,
 # 导出 docx（不用模型 · P0-5 方案 A：deskpet 内纯函数，tools.coding 不进进程）
 # ===========================================================================
 # P0-1 / Step 0-2：导出目录统一落用户数据目录（deskpet/paths.py），
-# 绝不放在 deskpet/static/ 下 —— static 整个被 mount，
+# 绝不放在 desktop/renderer/ 下 —— static 整个被 mount，
 # /static/exports/{fname} 会 200，旁路下载路由的三道闩。
 # 下载走 /exports/{filename} 白名单路由。
 # 文件名白名单：只放行本模块自己生成的名字，从构造上杜绝 ../ 路径穿越

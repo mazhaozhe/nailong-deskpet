@@ -1,5 +1,5 @@
 """
-tests/test_discover.py —— 模型自动发现（一家 Key → 这家全部模型）的单元测试
+tests/shared/test_discover.py —— 模型自动发现（一家 Key → 这家全部模型）的单元测试
 覆盖：正常发现注册 / reasoner 类型识别 / 静态条目不覆盖 / 网络失败缓存回退 / 无 Key 跳过
 """
 
@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from agent import models
+from shared import models
 
 
 def _manager(tmp_path, entries):

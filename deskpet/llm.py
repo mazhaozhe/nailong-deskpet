@@ -8,7 +8,7 @@
     - 输出收敛成固定 JSON schema：with_structured_output(Schema)，禁止自由文本。
 
 懒加载铁闸（硬闸门 off_state_no_imports 的命根子）：
-    本模块顶层【绝不】import agent.models / langchain_* / memory.cache ——
+    本模块顶层【绝不】import shared.models / langchain_* / shared.cache ——
     全部下沉到 _ensure_model() 内部，只有「开关非关 + 有 Key」的首次真实
     调用才触发 import；关态 / 自动无 Key 下连 import 都不发生。
     缓存 enable_llm_cache(db_path) 必须传路径（v6.1 更正，无参会 TypeError），
@@ -126,14 +126,14 @@ class LlmGateway:
             self._pricing = {}  # 读不到 → 成本按「价格未配置」如实标注
 
     def _ensure_model(self, model_id: str) -> Any:
-        """首次真正启用才 import agent.models / memory.cache（懒加载唯一入口）。
+        """首次真正启用才 import shared.models / shared.cache（懒加载唯一入口）。
 
         manager 只建一次；换档用 manager.switch(id)（那是 ModelManager 自己的
         实例切换，不是被禁的 agent api.switch_model()——后者会重建 Agent）。
         """
         with self._lock:
             if self._manager is None:
-                from agent.models import ModelManager   # ← 懒加载 import 点
+                from shared.models import ModelManager   # ← 懒加载 import 点
                 mgr = ModelManager(self._catalog_path())
                 mgr.init_default(PRIMARY_ID)
                 self._manager = mgr
@@ -141,7 +141,7 @@ class LlmGateway:
                 if not self._cache_enabled:
                     # v6.1 §4.5：必须传路径；只在首次真正启用时调一次。
                     # 「启动时无条件调」会打穿关态 sys.modules 闸门，禁止。
-                    from memory.cache import enable_llm_cache
+                    from shared.cache import enable_llm_cache
                     self._cache_enabled = enable_llm_cache(
                         paths.get_cache_db_path())
             if model_id and model_id != self._manager.current_id:

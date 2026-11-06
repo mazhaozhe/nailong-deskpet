@@ -1,5 +1,5 @@
 """
-agent/config.py —— 配置中心
+shared/config.py —— 配置中心
 ============================
 从项目根目录的 .env 加载配置（pydantic-settings，类型安全 + 自动校验）。
 所有路径统一基于项目根目录解析，避免"在哪个目录启动"导致的相对路径错乱。
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 项目根目录（agent/config.py 的上两级）
+# 项目根目录（shared/config.py 的上两级）
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # 把 .env 真正读进进程环境变量（os.environ）。
@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     def validate_runtime(self) -> list[str]:
         """
         启动前校验，返回问题列表（空列表=一切正常）。
-        不直接抛异常，是为了让 main.py 能一次性把所有问题都提示给用户。
+        不直接抛异常，是为了让 agent/__main__.py 能一次性把所有问题都提示给用户。
         """
         problems: list[str] = []
 
@@ -178,5 +178,5 @@ class Settings(BaseSettings):
         return problems
 
 
-# 全局单例：其他模块直接 from agent.config import settings
+# 全局单例：其他模块直接 from shared.config import settings
 settings = Settings()

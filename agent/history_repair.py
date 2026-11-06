@@ -165,7 +165,7 @@ async def repair_history(agent: Any, thread_id: str) -> int:
     """
     if agent is None:
         return 0
-    from agent.observability import log_step   # 延迟导入，避免与 observability 成环
+    from shared.observability import log_step   # 延迟导入，避免与 observability 成环
     config = {"configurable": {"thread_id": thread_id}}
     try:
         snapshot = await agent.aget_state(config)

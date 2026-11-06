@@ -1,4 +1,4 @@
-"""tests/test_deskpet_no_model.py —— 关态防回归测试（硬闸门 3，v6.1 口径）
+"""tests/backend/test_deskpet_no_model.py —— 关态防回归测试（硬闸门 3，v6.1 口径）
 
 阶段 3 起语义升级：不再断言「阶段 2 不碰模型」，而是断言
 「开关=关（或自动+无 Key）时零模型层 import、零调用」——
@@ -6,7 +6,7 @@
 
 证据链（P0-4 返工后保留）：
   1. sys.modules 断言（子进程隔离，跑完含导出 docx 的主流程后检查）：
-     agent.models / tools.coding / langchain chat model 基类都不应进进程。
+     shared.models / tools.coding / langchain chat model 基类都不应进进程。
      「导出之后」时点也要干净——方案 A（deskpet/docx_gen 纯函数）保证。
   2. 真 monkeypatch 拦截：patch 掉 langchain chat model 的 invoke/ainvoke
      入口，被调即抛 AssertionError。附 patch 生效自检——故意调一次被
@@ -15,7 +15,7 @@
 
 测试环境口径（附录A-2）：清 KEY + 显式设「关」，两者都做。
 
-运行：python -m pytest tests/test_deskpet_no_model.py -q
+运行：python -m pytest tests/backend/test_deskpet_no_model.py -q
 """
 
 import json
@@ -74,8 +74,8 @@ assert r.status_code == 200, r.text
 r = c.get(r.json()["download_url"]); assert r.status_code == 200
 
 print(json.dumps({
-    "agent_models": [m for m in sys.modules if m == "agent.models"],
-    "memory_cache": [m for m in sys.modules if m == "memory.cache"],
+    "agent_models": [m for m in sys.modules if m == "shared.models"],
+    "memory_cache": [m for m in sys.modules if m == "shared.cache"],
     "tools_coding": [m for m in sys.modules if m == "tools.coding"],
     "tools_pkg_init": [m for m in sys.modules if m == "tools"],
     "lc_chat": [m for m in sys.modules
@@ -93,15 +93,15 @@ def test_import_and_full_flow_keep_model_layer_out():
     """
     r = subprocess.run([sys.executable, "-c", _SUBPROCESS_CODE],
                        capture_output=True, text=True,
-                       cwd=os.path.dirname(os.path.dirname(
-                           os.path.abspath(__file__))),
+                       cwd=os.path.dirname(os.path.dirname(os.path.dirname(
+                           os.path.abspath(__file__)))),
                        timeout=120)
     assert r.returncode == 0, f"子进程失败:\n{r.stdout}\n{r.stderr}"
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert not out["agent_models"], (
-        f"agent.models 被拉进进程：{out['agent_models']}")
+        f"shared.models 被拉进进程：{out['agent_models']}")
     assert not out["memory_cache"], (
-        f"memory.cache 被拉进进程：{out['memory_cache']}——关态绝不能启用缓存")
+        f"shared.cache 被拉进进程：{out['memory_cache']}——关态绝不能启用缓存")
     assert not out["tools_coding"], (
         f"tools.coding(run_shell 所在模块) 被拉进进程：{out['tools_coding']}——"
         f"违反方案 A 隔离导入口径")
@@ -133,8 +133,8 @@ print(json.dumps({"total": model_counter.total(),
 """
     r = subprocess.run([sys.executable, "-c", code],
                        capture_output=True, text=True,
-                       cwd=os.path.dirname(os.path.dirname(
-                           os.path.abspath(__file__))),
+                       cwd=os.path.dirname(os.path.dirname(os.path.dirname(
+                           os.path.abspath(__file__)))),
                        timeout=120)
     assert r.returncode == 0, f"子进程失败:\n{r.stdout}\n{r.stderr}"
     out = json.loads(r.stdout.strip().splitlines()[-1])

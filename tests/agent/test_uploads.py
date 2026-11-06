@@ -1,5 +1,5 @@
 """
-tests/test_uploads.py —— 附件上传模块的单元测试
+tests/agent/test_uploads.py —— 附件上传模块的单元测试
 ================================================
 覆盖 agent/uploads.py 的核心逻辑：
 - classify / format_size / _safe_name：分类与展示
@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 
 from agent import uploads
-from agent.config import settings
-from agent.models import ModelSpec, _guess_vision
+from shared.config import settings
+from shared.models import ModelSpec, _guess_vision
 
 PNG_BYTES = bytes([137, 80, 78, 71, 13, 10, 26, 10]) + b"fake-png-body"
 

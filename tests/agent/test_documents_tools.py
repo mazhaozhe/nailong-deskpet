@@ -1,5 +1,5 @@
 """
-tests/test_documents_tools.py —— 文档生成工具测试
+tests/agent/test_documents_tools.py —— 文档生成工具测试
 ==================================================
 验证 docx / xlsx / pptx 三个生成器的正常路径与错误路径。
 """

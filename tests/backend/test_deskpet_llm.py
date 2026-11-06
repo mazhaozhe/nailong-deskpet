@@ -1,4 +1,4 @@
-"""tests/test_deskpet_llm.py —— 阶段 3 模型层测试（自动+假 Key 档，不接真实 API）
+"""tests/backend/test_deskpet_llm.py —— 阶段 3 模型层测试（自动+假 Key 档，不接真实 API）
 
 附录 B 口径：「自动 + 有 Key」一律用假 Key 经注入环境变量
 DEEPSEEK_API_KEY（= deskpet.llm.KEY_ENV，来自 config/models.json 的
@@ -8,7 +8,7 @@ api_key_env）注入来验，不接真实 API、不发真实请求——ModelMan
 关态零 import（sys.modules 闸门）由 test_deskpet_no_model.py 的
 子进程档负责（隔离，不受本文件的模型层 import 污染）。
 
-运行：python -m pytest tests/test_deskpet_llm.py -q
+运行：python -m pytest tests/backend/test_deskpet_llm.py -q
 """
 
 from __future__ import annotations
@@ -93,9 +93,9 @@ class FakeManager:
 
 
 def _patch_model_layer(monkeypatch, specs):
-    """把 agent.models.ModelManager 换成返回 FakeManager 的工厂。"""
+    """把 shared.models.ModelManager 换成返回 FakeManager 的工厂。"""
     mgr = FakeManager(specs)
-    import agent.models as am
+    import shared.models as am
     monkeypatch.setattr(am, "ModelManager", lambda catalog_path=None: mgr)
     return mgr
 
@@ -515,16 +515,16 @@ def test_capabilities_endpoint_lists_quota(env):
 
 def test_llm_module_top_level_stays_lazy():
     """懒加载铁闸静态自检：deskpet/llm.py 顶层不得出现
-    agent.models / langchain / memory.cache / tools 的 import
+    shared.models / langchain / shared.cache / tools 的 import
     （它们只允许出现在函数体内的懒加载点）。"""
-    src = Path(__file__).resolve().parents[1].joinpath(
+    src = Path(__file__).resolve().parents[2].joinpath(
         "deskpet", "llm.py").read_text(encoding="utf-8")
     for line in src.splitlines():
         if line.startswith(("import ", "from ")):   # 顶层（无缩进）
             low = line.lower()
-            assert "agent.models" not in low, f"顶层 import 打穿关态闸门：{line}"
+            assert "shared.models" not in low, f"顶层 import 打穿关态闸门：{line}"
             assert "langchain" not in low, f"顶层 import 打穿关态闸门：{line}"
-            assert "memory.cache" not in low, f"顶层 import 打穿关态闸门：{line}"
+            assert "shared.cache" not in low, f"顶层 import 打穿关态闸门：{line}"
             assert not low.startswith(("from tools", "import tools")), \
                 f"顶层 import 禁用工具包：{line}"
 

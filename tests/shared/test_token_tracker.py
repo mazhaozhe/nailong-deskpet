@@ -1,5 +1,5 @@
 """
-tests/test_token_tracker.py —— Token 统计与预估模块的单元测试
+tests/shared/test_token_tracker.py —— Token 统计与预估模块的单元测试
 覆盖：文本估算 / 消息抽取 / 成本折算 / 事前预估 / 事后差分统计 /
       估算兜底 / 会话累计 / ModelSpec.pricing 解析
 """
@@ -9,8 +9,8 @@ import asyncio
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agent import token_tracker as tt
-from agent.models import ModelSpec
+from shared import token_tracker as tt
+from shared.models import ModelSpec
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ agent/output_guard.py —— 模型输出退化检测（防"复读机"）
 三道防线
 --------
 1. 采样层：frequency_penalty 抑制重复（core.py 的 build_model）
-2. 流式层：退化一出现立刻中止生成（client/bridge.py 的 consume_stream）
+2. 流式层：退化一出现立刻中止生成（desktop/bridge.py 的 consume_stream）
 3. 历史层：把已膨胀的历史消息截断，别污染下一轮（history_repair.clean_degenerate）
 
 两个检测器（取更早的那个起点）

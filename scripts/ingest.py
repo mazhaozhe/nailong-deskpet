@@ -18,8 +18,8 @@ from pathlib import Path
 # 支持从项目根目录直接运行：python scripts/ingest.py ...
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent.config import settings  # noqa: E402
-from agent.observability import setup_logging  # noqa: E402
+from shared.config import settings  # noqa: E402
+from shared.observability import setup_logging  # noqa: E402
 from memory.rag import CHROMA_AVAILABLE, ingest  # noqa: E402
 
 TEXT_EXTS = {".txt", ".md", ".markdown", ".rst", ".py", ".java", ".c", ".cpp", ".json", ".csv"}

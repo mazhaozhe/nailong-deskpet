@@ -26,7 +26,7 @@ import requests
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
-from memory.cache import cached
+from shared.cache import cached
 from tools.registry import register
 
 UA = {

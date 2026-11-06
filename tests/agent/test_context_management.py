@@ -1,5 +1,5 @@
 """
-tests/test_context_management.py —— 上下文压缩机制的单元测试
+tests/agent/test_context_management.py —— 上下文压缩机制的单元测试
 覆盖：
     - compute_summary_trigger  预算式触发点计算（窗口 - 输出 - 静态 - 余量）
     - is_summary_message       摘要消息识别
@@ -14,9 +14,9 @@ import asyncio
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent import token_tracker as tt
-from agent.config import settings
-from agent.models import ModelSpec, _window_kwargs
+from shared import token_tracker as tt
+from shared.config import settings
+from shared.models import ModelSpec, _window_kwargs
 
 
 # ---------------------------------------------------------------------------

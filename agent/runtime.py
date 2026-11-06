@@ -23,10 +23,10 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from agent.config import BASE_DIR
+from shared.config import BASE_DIR
 from agent.core import build_agent, build_checkpointer
-from agent.models import ModelManager
-from agent.observability import log_step
+from shared.models import ModelManager
+from shared.observability import log_step
 
 # 模型目录默认位置：项目根/config/models.json
 DEFAULT_CATALOG = BASE_DIR / "config" / "models.json"

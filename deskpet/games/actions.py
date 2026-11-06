@@ -63,7 +63,7 @@ class ActionWhitelist:
 # ===========================================================================
 # 内置游戏的白名单动作表（实现阶段填具体按键；此处给骨架示例）
 # ===========================================================================
-# 示例：thunder-fighter（已存在 games/thunder-fighter.html）
+# 示例：thunder-fighter（已存在 examples/thunder-fighter/index.html）
 THUNDER_FIGHTER_ACTIONS = ActionWhitelist("thunder-fighter")
 # 实现阶段注册，例如：
 # THUNDER_FIGHTER_ACTIONS.register(GameAction("move_left",  "key", {"key": "ArrowLeft"}))

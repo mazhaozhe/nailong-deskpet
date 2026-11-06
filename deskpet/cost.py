@@ -80,9 +80,9 @@ def record_usage(route: str, model_id: str, usage: Optional[dict],
 
         in_tok = int(usage.get("input_tokens") or 0)
         out_tok = int(usage.get("output_tokens") or 0)
-        # 懒加载：agent.token_tracker 顶层不 import langchain，
+        # 懒加载：shared.token_tracker 顶层不 import langchain，
         # 但保持与模型层一致的懒风格（关态零 import 的闸门在 llm.py）
-        from agent.token_tracker import estimate_cost
+        from shared.token_tracker import estimate_cost
         cost = estimate_cost(pricing, in_tok, out_tok)
         note = ""
         if cost is None:

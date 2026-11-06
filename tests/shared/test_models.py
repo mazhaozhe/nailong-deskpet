@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from agent.models import (
+from shared.models import (
     ModelBuildError,
     ModelConfigError,
     ModelManager,
@@ -149,7 +149,7 @@ def test_switch_build_failure_keeps_old(manager):
 
 def test_switch_ping_failure_rolls_back(manager, monkeypatch):
     manager.init_default()
-    monkeypatch.setattr("agent.models.ModelManager._instantiate",
+    monkeypatch.setattr("shared.models.ModelManager._instantiate",
                         lambda self, spec: FakeModel(spec, "k", fail=True))
     with pytest.raises(ModelSwitchError):
         manager.switch("a-reasoner", ping=True)
