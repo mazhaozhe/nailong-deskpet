@@ -32,3 +32,8 @@ npm-debug.log*
 # 系统文件
 Thumbs.db
 desktop.ini
+
+# 内部过程留档（施工指令 / 上传清单 / TRAE 规则），只在本机保存，不随公开仓库发布
+/.trae/
+/docs/阶段*.md
+/docs/上传GitHub_分批commit清单.md
