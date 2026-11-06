@@ -1,2 +1,2 @@
 @echo off
-call "%~dp0scripts\start-agent.bat"
+call "%~dp0desktop\start.bat"

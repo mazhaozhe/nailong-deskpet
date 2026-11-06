@@ -35,10 +35,10 @@ def create_app() -> FastAPI:
     # 静态文件（前端页 + 预置通知 JSON）。
     # 注意：导出目录不在 static 下（Step 0-2 移到用户数据目录 deskpet/paths.py），
     # /static/exports/* 一律 404，白名单三道闩不再被旁路。
-    static_dir = Path(__file__).parent / "static"
-    # 阶段 5：奶龙素材只有 client/assets/nailong 这一份；经只读静态挂载
+    static_dir = Path(__file__).parent.parent / "desktop" / "renderer"
+    # 阶段 5：奶龙素材只有 desktop/assets/nailong 这一份；经只读静态挂载
     # 提供给 FastAPI 主体页，Electron 与浏览器共用，不复制第二套帧。
-    nailong_dir = Path(__file__).parent.parent / "client" / "assets" / "nailong"
+    nailong_dir = Path(__file__).parent.parent / "desktop" / "assets" / "nailong"
     app.mount("/static/nailong", StaticFiles(directory=str(nailong_dir)), name="nailong")
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 

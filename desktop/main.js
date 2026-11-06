@@ -5,6 +5,7 @@ const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const path = require('path');
+const { installNativeClick } = require('./native-click');
 
 const ROOT = path.resolve(__dirname, '..');
 const PYTHON = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
@@ -18,7 +19,10 @@ let backend = null;
 let apiPort = 0;
 let currentUserId = SMOKE_UID;
 let isQuitting = false;
-let dragOffset = null;
+let mouseIgnored = true;
+let cursorTimer = null;
+let disposeNativeClick = null;
+let positionSaveTimer = null;
 let notificationTimer = null;
 let backendGeneration = 0;
 let runtimeLog = '';
@@ -187,16 +191,29 @@ async function restartBackend() {
   }
 }
 
-function clampPosition(x, y) {
-  const area = screen.getDisplayNearestPoint({ x, y }).workArea;
+function clampPosition(x, y, bounds = { x: 0, y: 0, ...WINDOW_SIZE }) {
+  const area = screen.getDisplayNearestPoint({
+    x: Math.round(x + bounds.x + bounds.width / 2),
+    y: Math.round(y + bounds.y + bounds.height / 2)
+  }).workArea;
+  const left = area.x - bounds.x;
+  const top = area.y - bounds.y;
+  const right = area.x + area.width - bounds.x - bounds.width;
+  const bottom = area.y + area.height - bounds.y - bounds.height;
   return {
-    x: Math.max(area.x, Math.min(x, area.x + area.width - WINDOW_SIZE.width)),
-    y: Math.max(area.y, Math.min(y, area.y + area.height - WINDOW_SIZE.height)),
-    hitLeft: x <= area.x,
-    hitRight: x >= area.x + area.width - WINDOW_SIZE.width,
-    hitTop: y <= area.y,
-    hitBottom: y >= area.y + area.height - WINDOW_SIZE.height
+    x: Math.round(Math.max(left, Math.min(x, right))),
+    y: Math.round(Math.max(top, Math.min(y, bottom))),
+    hitLeft: x <= left,
+    hitRight: x >= right,
+    hitTop: y <= top,
+    hitBottom: y >= bottom
   };
+}
+
+function setMousePassthrough(ignore) {
+  if (!mainWindow || mainWindow.isDestroyed() || mouseIgnored === ignore) return;
+  mainWindow.setIgnoreMouseEvents(ignore, { forward: true });
+  mouseIgnored = ignore;
 }
 
 function saveWindowPosition() {
@@ -209,6 +226,7 @@ function showMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.show();
   mainWindow.focus();
+  mainWindow.webContents.send('pet:command', 'open');
 }
 
 function notify(title, body) {
@@ -264,6 +282,9 @@ function createWindow() {
       sandbox: true
     }
   });
+  if (process.platform === 'win32') {
+    disposeNativeClick = installNativeClick(mainWindow, screen, () => mainWindow.webContents.send('pet:command', 'open'), PYTHON);
+  }
   mainWindow.setAlwaysOnTop(saved.alwaysOnTop !== false, 'floating');
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
   mainWindow.on('close', (event) => {
@@ -273,7 +294,10 @@ function createWindow() {
       mainWindow.hide();
     }
   });
-  mainWindow.on('moved', saveWindowPosition);
+  mainWindow.on('moved', () => {
+    clearTimeout(positionSaveTimer);
+    positionSaveTimer = setTimeout(saveWindowPosition, 250);
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -358,7 +382,7 @@ async function runSmokeTest() {
         uniqueFrames: Number($('#petCanvas').dataset.frames),
         canvasVisible: $('#petCanvas').getBoundingClientRect().height > 0
       };
-      $('#petCanvas').click();
+      $('#petCanvas').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
       const opened = !$('#panel').hidden;
       $('[data-sample]').click();
       const sampleOnlyFills = $('#noticeText').value.length > 0 && $$('#todoList .todo-item').length === 0;
@@ -453,29 +477,16 @@ app.whenReady().then(async () => {
     if (typeof uid === 'string' && /^[0-9a-f-]{36}$/i.test(uid)) currentUserId = uid;
   });
   ipcMain.on('mouse:passthrough', (_event, ignore) => {
-    if (mainWindow) mainWindow.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
+    if (mainWindow) {
+      setMousePassthrough(Boolean(ignore));
+    }
   });
-  ipcMain.on('pet:drag-start', () => {
-    if (!mainWindow) return;
+  cursorTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
     const cursor = screen.getCursorScreenPoint();
     const [x, y] = mainWindow.getPosition();
-    dragOffset = { x: cursor.x - x, y: cursor.y - y };
-  });
-  ipcMain.handle('pet:drag-move', () => {
-    if (!mainWindow || !dragOffset) return null;
-    const cursor = screen.getCursorScreenPoint();
-    const next = clampPosition(cursor.x - dragOffset.x, cursor.y - dragOffset.y);
-    mainWindow.setPosition(next.x, next.y, false);
-    return next;
-  });
-  ipcMain.handle('pet:move', (_event, delta) => {
-    if (!mainWindow) return null;
-    const [x, y] = mainWindow.getPosition();
-    const next = clampPosition(Math.round(x + Number(delta.dx || 0)), Math.round(y + Number(delta.dy || 0)));
-    mainWindow.setPosition(next.x, next.y, false);
-    return next;
-  });
-  ipcMain.on('pet:drag-end', () => { dragOffset = null; saveWindowPosition(); });
+    mainWindow.webContents.send('pet:cursor', { x: cursor.x - x, y: cursor.y - y });
+  }, 50);
   ipcMain.on('pet:context-menu', showPetMenu);
   ipcMain.on('desktop:top', (_event, value) => {
     const next = updateDesktopSettings({ alwaysOnTop: Boolean(value) });
@@ -517,6 +528,8 @@ app.on('before-quit', async (event) => {
   event.preventDefault();
   isQuitting = true;
   if (notificationTimer) clearInterval(notificationTimer);
+  if (cursorTimer) clearInterval(cursorTimer);
+  if (disposeNativeClick) disposeNativeClick();
   saveWindowPosition();
   await stopBackend();
   app.exit(0);

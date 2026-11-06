@@ -5,10 +5,6 @@ contextBridge.exposeInMainWorld('deskpetShell', {
   getSettings: () => ipcRenderer.invoke('desktop:settings:get'),
   identify: (uid) => ipcRenderer.send('user:identity', uid),
   setMousePassthrough: (ignore) => ipcRenderer.send('mouse:passthrough', ignore),
-  dragStart: () => ipcRenderer.send('pet:drag-start'),
-  dragMove: () => ipcRenderer.invoke('pet:drag-move'),
-  dragEnd: () => ipcRenderer.send('pet:drag-end'),
-  moveWindow: (delta) => ipcRenderer.invoke('pet:move', delta),
   contextMenu: () => ipcRenderer.send('pet:context-menu'),
   setAlwaysOnTop: (value) => ipcRenderer.send('desktop:top', value),
   setMuted: (value) => ipcRenderer.send('desktop:mute', value),
@@ -27,6 +23,11 @@ contextBridge.exposeInMainWorld('deskpetShell', {
     const listener = (_event, settings) => callback(settings);
     ipcRenderer.on('desktop:settings', listener);
     return () => ipcRenderer.removeListener('desktop:settings', listener);
+  },
+  onCursor: (callback) => {
+    const listener = (_event, point) => callback(point);
+    ipcRenderer.on('pet:cursor', listener);
+    return () => ipcRenderer.removeListener('pet:cursor', listener);
   },
   platform: process.platform
 });

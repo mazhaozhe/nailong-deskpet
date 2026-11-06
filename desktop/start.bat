@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 if not exist "..\.venv\Scripts\python.exe" (
   echo [ERROR] Python environment not found: ..\.venv
-  echo Please install the original GeneralTaskAgent dependencies first.
+  echo Please install the project Python dependencies first.
   pause
   exit /b 1
 )

@@ -45,175 +45,12 @@
     }
   }
 
-  class PetAnimator {
-    constructor(canvas, shell) {
-      this.canvas = canvas;
-      this.ctx = canvas.getContext('2d', { willReadFrequently: true });
-      this.shell = shell;
-      this.manifest = null;
-      this.animations = new Map();
-      this.images = new Map();
-      this.current = null;
-      this.currentKey = '';
-      this.direction = 1;
-      this.startedAt = 0;
-      this.lastAt = 0;
-      this.behaviorDue = 0;
-      this.completed = false;
-      this.dragging = false;
-      this.hidden = document.hidden;
-      this.moveElapsed = 0;
-      this.movePending = false;
-      this.behaviorIndex = 0;
-      this.behaviors = ['idle2', 'sit', 'idle3', 'stroll', 'idle4', 'sleep', 'idle', 'walk', 'work'];
-      document.addEventListener('visibilitychange', () => {
-        this.hidden = document.hidden;
-        this.lastAt = 0;
-        if (!this.hidden) this.behaviorDue = performance.now() + this.idleDelay();
-      });
-    }
-
-    idleDelay() {
-      const [min, max] = this.manifest ? this.manifest.meta.idleMs : [25000, 35000];
-      return min + Math.random() * (max - min);
-    }
-
-    async load() {
-      const response = await fetch('/static/nailong/manifest.json');
-      if (!response.ok) throw new Error('奶龙动作表读取失败');
-      this.manifest = await response.json();
-      for (const animation of this.manifest.animations) this.animations.set(animation.key, animation);
-      const names = [...new Set(this.manifest.animations.flatMap((animation) => animation.frames.map((frame) => frame.name)))];
-      await Promise.all(names.map((name) => new Promise((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => { this.images.set(name, image); resolve(); };
-        image.onerror = () => reject(new Error(`奶龙帧缺失：${name}`));
-        image.src = `/static/nailong/frames/${name}.png`;
-      })));
-      this.canvas.dataset.animations = String(this.animations.size);
-      this.canvas.dataset.frames = String(names.length);
-      this.switchTo('idle', true);
-      requestAnimationFrame((time) => this.tick(time));
-    }
-
-    switchTo(key, force = false) {
-      const next = this.animations.get(key);
-      if (!next || (!force && this.dragging && key !== 'run')) return false;
-      this.currentKey = key;
-      this.current = next;
-      this.startedAt = performance.now();
-      this.completed = false;
-      this.direction = next.facing === 'left' ? -1 : 1;
-      this.moveElapsed = 0;
-      const mobile = next.move > 0;
-      this.behaviorDue = performance.now() + (mobile ? 9000 : this.idleDelay());
-      this.canvas.dataset.action = key;
-      return true;
-    }
-
-    react() {
-      if (this.dragging) return;
-      const sequence = ['wave', 'laugh', 'shy'];
-      const next = sequence[(sequence.indexOf(this.currentKey) + 1) % sequence.length];
-      this.switchTo(next);
-    }
-
-    work() { if (!this.dragging) this.switchTo('work'); }
-
-    setDragging(value) {
-      this.dragging = value;
-      if (value) this.switchTo('run', true);
-      else this.switchTo('shy', true);
-    }
-
-    chooseBehavior(now) {
-      const key = this.behaviors[this.behaviorIndex % this.behaviors.length];
-      this.behaviorIndex += 1;
-      this.switchTo(key);
-      if (key === 'walk' || key === 'stroll') this.behaviorDue = now + 9000;
-    }
-
-    hitTest(event) {
-      if (!this.current) return false;
-      const rect = this.canvas.getBoundingClientRect();
-      const x = Math.floor((event.clientX - rect.left) * this.canvas.width / rect.width);
-      const y = Math.floor((event.clientY - rect.top) * this.canvas.height / rect.height);
-      if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return false;
-      try { return this.ctx.getImageData(x, y, 1, 1).data[3] > 16; } catch { return false; }
-    }
-
-    async moveWindow(delta) {
-      if (!this.shell || this.movePending || delta === 0) return;
-      this.movePending = true;
-      try {
-        const bounds = await this.shell.moveWindow({ dx: delta, dy: 0 });
-        if (bounds && ((bounds.hitLeft && this.direction < 0) || (bounds.hitRight && this.direction > 0))) {
-          this.direction *= -1;
-        }
-      } catch {} finally { this.movePending = false; }
-    }
-
-    draw() {
-      if (!this.current) return;
-      const frameIndex = this.frameIndex || 0;
-      const frame = this.current.frames[Math.min(frameIndex, this.current.frames.length - 1)];
-      const image = this.images.get(frame.name);
-      if (!image) return;
-      const width = this.manifest.meta.cellW;
-      const height = this.manifest.meta.cellH;
-      this.ctx.clearRect(0, 0, width, height);
-      this.ctx.save();
-      const baseDirection = this.current.facing === 'left' ? -1 : 1;
-      if (this.direction !== baseDirection && this.current.facing !== 'front') {
-        this.ctx.translate(width, 0);
-        this.ctx.scale(-1, 1);
-      }
-      // 帧的 ox/oy/w/h 来自 manifest；源帧地面线已对齐到 y=203。
-      this.ctx.drawImage(image, this.current.ox, frame.oy, frame.w, frame.h);
-      this.ctx.restore();
-    }
-
-    tick(now) {
-      requestAnimationFrame((time) => this.tick(time));
-      if (this.hidden || !this.current) { this.lastAt = now; return; }
-      const delta = this.lastAt ? Math.min((now - this.lastAt) / 1000, 0.1) : 0;
-      this.lastAt = now;
-      const animation = this.current;
-      const elapsed = Math.max(0, (now - this.startedAt) / 1000);
-      const rawFrame = Math.floor(elapsed * animation.fps);
-      const frameCount = animation.frames.length;
-      if (animation.loop) {
-        this.frameIndex = rawFrame % frameCount;
-      } else {
-        const total = frameCount * Math.max(1, animation.repeat || 1);
-        this.frameIndex = Math.min(rawFrame, frameCount - 1);
-        if (rawFrame >= total) {
-          this.frameIndex = animation.hold ? frameCount - 1 : frameCount - 1;
-          if (!animation.hold && !this.completed) {
-            this.completed = true;
-            this.switchTo('idle', true);
-          }
-        }
-      }
-      if (!this.dragging && now >= this.behaviorDue && (animation.loop || animation.hold)) this.chooseBehavior(now);
-      if (!this.dragging && animation.move > 0 && this.shell) {
-        this.moveElapsed += delta;
-        if (this.moveElapsed >= 0.08) {
-          const distance = animation.move * this.moveElapsed * this.direction;
-          this.moveElapsed = 0;
-          this.moveWindow(distance);
-        }
-      }
-      this.draw();
-    }
-  }
-
   class DeskpetApp {
     constructor() {
       this.api = new Api();
       this.shell = window.deskpetShell || null;
       this.machine = new UiStateMachine();
-      this.pet = new PetAnimator($('#petCanvas'), this.shell);
+      this.pet = new PetController($('#petCanvas'), this.shell, () => this.activatePet());
       this.todos = [];
       this.growth = null;
       this.checklist = [];
@@ -221,12 +58,11 @@
       this.keyConfigured = false;
       this.keyPromptDismissed = false;
       this.decisionToken = 0;
-      this.drag = null;
-      this.suppressClick = false;
       this.toastTimer = null;
       this.game = null;
       this.gameTimer = null;
       this.gamePaused = false;
+      this.gameStarting = false;
     }
 
     async init() {
@@ -282,55 +118,7 @@
       $$('[data-external]').forEach((link) => link.addEventListener('click', (event) => {
         if (this.shell) { event.preventDefault(); this.shell.openExternal(link.href); }
       }));
-      document.addEventListener('pointermove', (event) => this.updateMousePassthrough(event));
-      const canvas = $('#petCanvas');
-      canvas.addEventListener('pointerdown', (event) => this.pointerDown(event));
-      canvas.addEventListener('pointermove', (event) => this.pointerMove(event));
-      canvas.addEventListener('pointerup', (event) => this.pointerUp(event));
-      canvas.addEventListener('pointercancel', (event) => this.pointerUp(event));
-      canvas.addEventListener('click', () => {
-        if (this.suppressClick) return;
-        this.activatePet();
-      });
-      canvas.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') this.activatePet(); });
-      canvas.addEventListener('contextmenu', (event) => { event.preventDefault(); if (this.shell) this.shell.contextMenu(); });
       document.addEventListener('visibilitychange', () => this.toggleGamePause(document.hidden));
-    }
-
-    updateMousePassthrough(event) {
-      if (!this.shell) return;
-      const interactive = event.target.closest('.panel,.bubble') || (event.target === $('#petCanvas') && this.pet.hitTest(event));
-      this.shell.setMousePassthrough(!interactive);
-    }
-
-    pointerDown(event) {
-      if (event.button !== 0 || !this.pet.hitTest(event)) return;
-      this.drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
-      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
-      if (this.shell) this.shell.dragStart();
-    }
-
-    pointerMove(event) {
-      if (!this.drag || this.drag.pointerId !== event.pointerId) return;
-      if (Math.hypot(event.clientX - this.drag.startX, event.clientY - this.drag.startY) > 4 && !this.drag.moved) {
-        this.drag.moved = true;
-        this.pet.setDragging(true);
-      }
-      if (this.drag.moved && this.shell) this.shell.dragMove();
-    }
-
-    pointerUp(event) {
-      if (!this.drag || this.drag.pointerId !== event.pointerId) return;
-      const moved = this.drag.moved;
-      this.drag = null;
-      this.suppressClick = true;
-      setTimeout(() => { this.suppressClick = false; }, 50);
-      if (moved) {
-        if (this.shell) this.shell.dragEnd();
-        this.pet.setDragging(false);
-      } else {
-        this.activatePet();
-      }
     }
 
     activatePet() {
@@ -347,6 +135,7 @@
 
     closePanel() {
       this.machine.transition('collapsed');
+      this.toggleGamePause(true);
       $('#panel').hidden = true;
       this.pet.switchTo('idle');
     }
@@ -354,6 +143,7 @@
     showView(name) {
       if (this.machine.state === 'collapsed') this.machine.transition('open');
       this.machine.transition(name);
+      this.toggleGamePause(name !== 'game' || document.hidden);
       $('#panel').hidden = false;
       $$('.view').forEach((view) => view.classList.toggle('active', view.id === `${name}View`));
       $$('.panel-tabs [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
@@ -629,9 +419,17 @@
       if (persist && this.shell) this.shell.setTheme(theme);
     }
 
-    startGame() {
+    async startGame() {
+      if (this.gameStarting) return;
+      this.gameStarting = true;
+      $('#startGame').disabled = true;
+      $('#finishGame').disabled = true;
+      $('#requestCommentary').disabled = true;
       this.stopGameTimer();
-      this.api.post('/game/start', { game_id: 'mini-snake', brain_level: 2 }).then((result) => {
+      if (this.game) this.game.ended = true;
+      $('#gameLog').textContent = '正在启动本地规则游戏…';
+      try {
+        const result = await this.api.post('/game/start', { game_id: 'mini-snake', brain_level: 1 });
         this.game = {
           sessionId: result.session_id,
           snake: [{ x: 6, y: 6 }],
@@ -639,15 +437,20 @@
           direction: { x: 1, y: 0 },
           steps: 0,
           score: 0,
-          strategy: result.initial_strategy ? result.initial_strategy.strategy_name : 'balanced',
+          strategy: 'greedy_food',
+          ended: false,
           reviewed: false
         };
         $('#finishGame').disabled = false;
-        $('#requestCommentary').disabled = true;
-        $('#gameLog').textContent = `开局成功。规则策略：${this.game.strategy}；解说保持${$('#commentaryEnabled').checked ? '开启但需手动点' : '关闭'}。`;
+        $('#gameLog').textContent = '规则游戏已开始。开局不调用模型，结束后再生成复盘。';
         this.drawGame();
-        this.gameTimer = setInterval(() => this.stepGame(), 180);
-      }).catch((error) => { $('#gameLog').textContent = error.message; });
+        if (!this.gamePaused) this.gameTimer = setInterval(() => this.stepGame(), 180);
+      } catch (error) {
+        $('#gameLog').textContent = `启动失败：${error.message}`;
+      } finally {
+        this.gameStarting = false;
+        $('#startGame').disabled = false;
+      }
     }
 
     stopGameTimer() {
@@ -656,34 +459,58 @@
     }
 
     toggleGamePause(hidden) {
-      this.gamePaused = hidden;
+      this.gamePaused = hidden || this.machine.state !== 'game';
       if (!this.game) return;
-      if (hidden) this.stopGameTimer();
-      else if (!this.game.reviewed && !this.gameTimer) this.gameTimer = setInterval(() => this.stepGame(), 180);
+      if (this.gamePaused) this.stopGameTimer();
+      else if (!this.game.ended && !this.game.reviewed && !this.gameStarting && !this.gameTimer) this.gameTimer = setInterval(() => this.stepGame(), 180);
     }
 
     stepGame() {
-      if (!this.game || this.gamePaused) return;
+      if (!this.game || this.game.ended || this.gamePaused) return;
       const game = this.game;
       const head = game.snake[0];
-      const dx = game.food.x - head.x;
-      const dy = game.food.y - head.y;
-      let direction = Math.abs(dx) > Math.abs(dy) ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) };
-      if (direction.x === -game.direction.x && direction.y === -game.direction.y) direction = game.direction;
-      game.direction = direction;
-      const next = { x: head.x + direction.x, y: head.y + direction.y };
+      const directions = [game.direction, { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }];
+      const choices = directions.filter((direction) => {
+        if (direction.x === -game.direction.x && direction.y === -game.direction.y) return false;
+        const x = head.x + direction.x;
+        const y = head.y + direction.y;
+        const eating = x === game.food.x && y === game.food.y;
+        const body = eating ? game.snake : game.snake.slice(0, -1);
+        return x >= 0 && y >= 0 && x < 12 && y < 12
+          && !body.some((part) => part.x === x && part.y === y);
+      });
       game.steps += 1;
-      if (next.x < 0 || next.y < 0 || next.x >= 12 || next.y >= 12 || game.snake.some((part) => part.x === next.x && part.y === next.y)) {
+      if (!choices.length) {
         this.finishGame('collision');
         return;
       }
+      choices.sort((a, b) => {
+        const distance = (direction) => Math.abs(head.x + direction.x - game.food.x)
+          + Math.abs(head.y + direction.y - game.food.y);
+        return distance(a) - distance(b);
+      });
+      game.direction = choices[0];
+      const next = { x: head.x + game.direction.x, y: head.y + game.direction.y };
+      const eating = next.x === game.food.x && next.y === game.food.y;
+      if (!eating) game.snake.pop();
       game.snake.unshift(next);
-      if (next.x === game.food.x && next.y === game.food.y) {
+      if (eating) {
         game.score += 1;
-        game.food = { x: (game.food.x * 7 + 3) % 12, y: (game.food.y * 5 + 4) % 12 };
-      } else game.snake.pop();
-      if (game.steps >= 120) { this.finishGame('completed'); return; }
+        const free = [];
+        for (let y = 0; y < 12; y++) {
+          for (let x = 0; x < 12; x++) {
+            if (!game.snake.some((part) => part.x === x && part.y === y)) free.push({ x, y });
+          }
+        }
+        if (!free.length) {
+          this.drawGame();
+          this.finishGame('completed');
+          return;
+        }
+        game.food = free[(game.score * 17) % free.length];
+      }
       this.drawGame();
+      if (game.steps >= 120) this.finishGame('completed');
     }
 
     drawGame() {
@@ -702,21 +529,25 @@
     }
 
     async finishGame(reason) {
-      if (!this.game || this.game.reviewed) return;
+      if (!this.game || this.game.ended) return;
       const game = this.game;
+      game.ended = true;
       this.stopGameTimer();
       $('#finishGame').disabled = true;
-      $('#gameLog').textContent = '本局结束，优先生成复盘…';
+      $('#gameLog').textContent = `本局结束：${reason}，得分 ${game.score}，共 ${game.steps} 步。正在生成复盘…`;
       try {
         const result = await this.api.post('/game/review', {
           session_id: game.sessionId,
           final_state: { game_id: 'mini-snake', result: reason, score: game.score, steps: game.steps },
           strategy_history: [game.strategy]
         });
+        if (this.game !== game) return;
         game.reviewed = true;
         $('#gameLog').textContent = `复盘：${result.data.takeaway}\n下次：${result.data.next_change || '保持规则策略，再试一局。'}`;
         this.updateCommentaryButton();
-      } catch (error) { $('#gameLog').textContent = `复盘暂时不可用：${error.message}`; }
+      } catch (error) {
+        if (this.game === game) $('#gameLog').textContent = `本局得分 ${game.score}。复盘暂时不可用：${error.message}`;
+      }
     }
 
     updateCommentaryButton() {

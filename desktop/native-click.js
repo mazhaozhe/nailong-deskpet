@@ -1,0 +1,87 @@
+'use strict';
+const { spawn } = require('node:child_process');
+const path = require('node:path');
+const { createInterface } = require('node:readline');
+
+function installNativeClick(win, screen, open, python) {
+  let press = null;
+  let generation = 0;
+  const watcher = spawn(python, ['-u', path.join(__dirname, 'native_mouse.py')], {
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const lines = createInterface({ input: watcher.stdout });
+  watcher.on('error', (error) => console.error('[native-click] release monitor:', error.message));
+  watcher.stdin.on('error', () => {});
+  watcher.stderr.on('data', (data) => console.error('[native-click]', data.toString()));
+
+  function sample(position = win.getPosition()) {
+    if (!press) return;
+    const cursor = screen.getCursorScreenPoint();
+    if (Math.hypot(cursor.x - press.cursor.x, cursor.y - press.cursor.y) >= 6
+        || Math.hypot(position[0] - press.position[0], position[1] - press.position[1]) >= 6) {
+      press.moved = true;
+    }
+  }
+
+  function finish(id = generation) {
+    if (!press || id !== generation) return;
+    sample();
+    const click = !press.moved;
+    const hit = press.hit;
+    const ticket = generation;
+    press = null;
+    if (click) hit.then((onPet) => {
+      if (!onPet) return;
+      setImmediate(() => {
+        if (ticket === generation && !win.isDestroyed() && win.isVisible()) open();
+      });
+    });
+  }
+
+  function begin() {
+    generation++;
+    const cursor = screen.getCursorScreenPoint();
+    const position = win.getPosition();
+    const x = cursor.x - position[0];
+    const y = cursor.y - position[1];
+    const hit = win.webContents.executeJavaScript(
+      `Boolean(document.elementFromPoint(${x}, ${y})?.closest('#petCanvas'))`
+    ).catch(() => false);
+    press = {
+      cursor,
+      position,
+      hit,
+      moved: false
+    };
+    if (!watcher.stdin.destroyed) watcher.stdin.write(generation + '\n');
+  }
+
+  // Chromium child windows report button presses through WM_PARENTNOTIFY.
+  win.hookWindowMessage(0x0210, (wParam) => {
+    if ((wParam.readUInt32LE(0) & 0xFFFF) === 0x0201) begin();
+  });
+  win.hookWindowMessage(0x00A1, (wParam) => {
+    if (wParam.readUInt32LE(0) === 2) begin();
+  });
+  lines.on('line', (line) => finish(Number(line)));
+  win.hookWindowMessage(0x0232, () => finish());
+  win.hookWindowMessage(0x0216, () => sample());
+  win.on('will-move', (_event, bounds) => sample([bounds.x, bounds.y]));
+  const cancel = () => {
+    press = null;
+    generation++;
+  };
+  win.hookWindowMessage(0x001F, cancel);
+  win.on('blur', cancel);
+  win.on('hide', cancel);
+  const dispose = () => {
+    cancel();
+    lines.close();
+    watcher.kill();
+  };
+  win.on('closed', dispose);
+  return dispose;
+}
+
+module.exports = { installNativeClick };

@@ -44,7 +44,7 @@
           <div id="catchupSummary" class="catchup-summary"></div>
         </section>
         <section id="gameView" class="view">
-          <div class="section-title"><div><h2>奶龙玩贪吃蛇</h2><p>实时操作只走确定性规则；复盘优先。</p></div></div>
+          <div class="section-title"><div><h2>奶龙玩贪吃蛇</h2><p>规则即时开局；结束后生成复盘。</p></div></div>
           <canvas id="gameCanvas" width="240" height="240" aria-label="贪吃蛇棋盘"></canvas>
           <div class="primary-actions"><button id="startGame" class="primary">开始一局</button><button id="finishGame" class="secondary" disabled>结束并复盘</button></div>
           <label class="switch-row"><span>按需解说（默认关闭）</span><input id="commentaryEnabled" type="checkbox"></label>
@@ -81,9 +81,10 @@
       <div id="keyPrompt" class="key-prompt" hidden><span>想让我读得更准吗？给我一把钥匙就行。</span><div><button id="configureKey">去配置</button><button id="laterKey">以后再说</button></div></div>
     </section>
 
-    <canvas id="petCanvas" class="pet-canvas" width="192" height="208" tabindex="0" role="button" aria-label="奶龙，点击展开清单，拖拽移动，右键更多操作"></canvas>
+    <canvas id="petCanvas" class="pet-canvas" width="192" height="208" tabindex="0" role="button" aria-label="奶龙，单击打开清单，按住拖动；也可按回车打开"></canvas>
     <div id="toast" class="toast" role="status"></div>
   </main>
+  <script src="/static/pet.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
