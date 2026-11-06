@@ -1,12 +1,12 @@
 """
 tests/agent/test_history_repair.py —— "孤儿 tool_calls" 历史修复的单元测试
 ==================================================================
-覆盖 agent/history_repair.py：
+覆盖 apps/agent/runtime/history_repair.py：
 - find_orphans：各种消息组合下的删除集合（只删不增、一遍收敛）
 - repair_history：通过 RemoveMessage + aupdate_state 落地删除
 - looks_like_orphan_error：真实 400 文案的识别（含正/负例）
 
-全部用假的 agent/checkpointer 交互对象，不调用真实模型。
+全部用假的 apps/agent/runtime/checkpointer 交互对象，不调用真实模型。
 """
 
 import asyncio
@@ -14,7 +14,7 @@ import asyncio
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 
-from agent.history_repair import find_orphans, looks_like_orphan_error, repair_history
+from apps.agent.runtime.history_repair import find_orphans, looks_like_orphan_error, repair_history
 
 # 截图里真实的 DeepSeek 400 文案（错误会自我延续的那条）
 REAL_400 = (

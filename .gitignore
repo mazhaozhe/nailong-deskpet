@@ -25,8 +25,8 @@ data/
 
 # Node / Electron 客户端
 node_modules/
-desktop/node_modules/
-desktop/dist/
+apps/deskpet/desktop/node_modules/
+apps/deskpet/desktop/dist/
 npm-debug.log*
 
 # 系统文件

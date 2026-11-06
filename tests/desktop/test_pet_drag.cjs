@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync(path.resolve(__dirname, '../../desktop/renderer/pet.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../../apps/deskpet/desktop/renderer/pet.js'), 'utf8');
 
 function setup() {
   const listeners = new Map();
@@ -69,7 +69,7 @@ test('native dragging has no JavaScript pointer state or movement handlers', () 
   for (const event of ['pointerdown', 'pointermove', 'pointerup', 'lostpointercapture']) {
     assert.equal(listeners.has(event), false);
   }
-  const css = fs.readFileSync(path.resolve(__dirname, '../../desktop/renderer/styles.css'), 'utf8');
+  const css = fs.readFileSync(path.resolve(__dirname, '../../apps/deskpet/desktop/renderer/styles.css'), 'utf8');
   assert.match(css, /body\.desktop \.pet-canvas\s*\{[^}]*app-region: drag/);
 });
 

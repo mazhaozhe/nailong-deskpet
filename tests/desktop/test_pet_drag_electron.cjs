@@ -1,10 +1,10 @@
-// Run with desktop/node_modules/electron/dist/electron.exe tests/desktop/test_pet_drag_electron.cjs.
+// Run with apps/deskpet/desktop/node_modules/electron/dist/electron.exe tests/desktop/test_pet_drag_electron.cjs.
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
 
 process.env.NAIWA_SMOKE_TEST = '1';
-const entry = path.resolve(__dirname, '../../desktop/main.js');
+const entry = path.resolve(__dirname, '../../apps/deskpet/desktop/main.js');
 const source = fs.readFileSync(entry, 'utf8').replace(
   'setTimeout(runSmokeTest, 1800)',
   'setTimeout(runDragWindowTest, 500)'

@@ -1,4 +1,4 @@
-from desktop.native_mouse import wait_for_release
+from apps.deskpet.desktop.native_mouse import wait_for_release
 
 
 def test_release_monitor_waits_until_left_button_is_up():

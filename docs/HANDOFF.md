@@ -4,12 +4,21 @@
 > 项目定位与能力说明见根目录 `README.md`，发布说明见 `docs/RELEASE.md`。
 > 本仓库是独立的桌宠项目，公开材料只讲桌宠。
 
+## 目录整理后的入口
+
+- 桌宠：根目录 `启动.bat`，或 `apps/deskpet/desktop/start.bat`。
+- 通用 Agent：`python -m apps.agent`，或 `scripts/start-agent.bat`。
+- 前端页面：`apps/deskpet/desktop/renderer/`，Electron 与素材均位于 `apps/deskpet/desktop/`。
+- 共享基础能力：`infrastructure/`；模型关闭时仍保持懒加载。
+- 测试：`tests/backend/`、`tests/desktop/`、`tests/agent/`、`tests/infrastructure/`。
+- 下节测试数字为迁移前历史基线，当前结果以实际命令输出为准。
+
 ## 0. 当前状态（2026-11-06）
 
 - 阶段 1–5 已完成并独立复测：`verify.py --level full` **22/22、ok:true**、pytest **249 passed**、桌面壳自检 `DESKTOP_SMOKE pass:true`。
 - 阶段 6（博客 / PPT / 需求文档 / 答辩）、阶段 7（打包 exe + GitHub Release）**未开工**。
 - 现在能跑的是「透明置顶桌面小窗 + 规则版主流程」，**还不是安装包**。
-- 仓库不含 `.env`、`.venv/`、`client/node_modules/`、`data/`，也不含任何预置或演示数据。
+- 仓库不含 `.env`、`.venv/`、`apps/deskpet/desktop/node_modules/`、`data/`，也不含任何预置或演示数据。
 
 ## 1. clone 后重建环境（Windows / PowerShell）
 
@@ -19,13 +28,13 @@
 Set-Location '<项目目录>'
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
-cd client
+cd apps/deskpet/desktop
 npm install
 ```
 
-- `requirements-rag.txt` 是可选扩展（只多 `langchain-chroma` / `chromadb`），**不装不影响主流程与全套自检**，`memory/rag.py` 有 `ImportError` 保护会自动跳过。
+- `requirements-rag.txt` 是可选扩展（只多 `langchain-chroma` / `chromadb`），**不装不影响主流程与全套自检**，`infrastructure/retrieval/rag.py` 有 `ImportError` 保护会自动跳过。
 - **不要创建 `.env`**：桌宠运行不需要它。Key 由使用者在应用内填写，见 `README.md` 第三节。
-- 启动（在 `client/` 下）：
+- 启动（在 `apps/deskpet/desktop/` 下）：
 
 ```powershell
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
@@ -40,7 +49,7 @@ npm start
 # 项目根：22 项机械检查 + 全套 pytest + 真实 HTTP
 .\.venv\Scripts\python.exe docs\验收集\verify.py --level full --root .
 
-# client/ 下：桌面壳自检（自动退出，只用于出证据）
+# apps/deskpet/desktop/ 下：桌面壳自检（自动退出，只用于出证据）
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $env:NAIWA_SMOKE_TEST = '1'
 .\node_modules\electron\dist\electron.exe .
@@ -54,21 +63,21 @@ Remove-Item Env:NAIWA_SMOKE_TEST -ErrorAction SilentlyContinue
 ## 3. 不许改的红线（代码级）
 
 **目录与路径**
-- `client/main.js`：`ROOT = path.resolve(__dirname, '..')`、`PYTHON = ROOT/.venv/Scripts/python.exe`、`spawn(PYTHON, ['-m', 'uvicorn', 'deskpet.app:app', ...], { cwd: ROOT })`，并注入 `PYTHONPATH=ROOT` / `DESKPET_DATA_DIR`。目录层级不可改。
-- `deskpet/app.py` 找 `../client/assets/nailong/`；`deskpet/llm.py` 找 `../config/models.json`。
+- `apps/deskpet/desktop/main.js`：`ROOT = path.resolve(__dirname, '../../..')`、`PYTHON = ROOT/.venv/Scripts/python.exe`、`spawn(PYTHON, ['-m', 'uvicorn', 'apps.deskpet.backend.app:app', ...], { cwd: ROOT })`，并注入 `PYTHONPATH=ROOT` / `DESKPET_DATA_DIR`。调整目录时必须同步修改路径解析和测试。
+- `apps/deskpet/backend/app.py` 找 `../desktop/assets/nailong/`；`apps/deskpet/backend/llm.py` 找 `../config/models.json`。
 
 **模型层**
-- 调用**只允许经 `deskpet/llm.py`（LlmGateway）**：`ModelManager` + `with_structured_output(Schema).ainvoke()`，固定 JSON schema、重试 ≤2、工具表 0。
-- 不要引入 `agent/core.py` 的 `build_agent()`，不要调 `init_runtime()` / `get_agent()` / `switch_model()`，不要在桌宠侧注册工具表。
+- 调用**只允许经 `apps/deskpet/backend/llm.py`（LlmGateway）**：`ModelManager` + `with_structured_output(Schema).ainvoke()`，固定 JSON schema、重试 ≤2、工具表 0。
+- 不要引入 `apps/agent/runtime/core.py` 的 `build_agent()`，不要调 `init_runtime()` / `get_agent()` / `switch_model()`，不要在桌宠侧注册工具表。
 - `switch()` 传 `config/models.json` 的**目录 id**（`deepseek-chat` / `deepseek-reasoner` / `ollama-local`），不是 `model` 字段的值；`max_input_tokens=131072` 是压缩预算，不要调成 1M。
-- 三态开关（关 / 自动默认 / 开）全局生效：`关` 态懒加载不许 import `langchain_core` / `langchain_community` / `agent.models` / `memory.cache` / `tools`；`自动` 无 Key 静默走规则版、失败降级；`开` 失败如实报错，不许假装成功。
+- 三态开关（关 / 自动默认 / 开）全局生效：`关` 态懒加载不许 import `langchain_core` / `langchain_community` / `infrastructure.llm.models` / `infrastructure.cache` / `tools`；`自动` 无 Key 静默走规则版、失败降级；`开` 失败如实报错，不许假装成功。
 - 四个易错口径：`enable_llm_cache(db_path)` 必须传参且只在网关启用时懒加载；`estimate_cost(pricing, input, output)` 三参；`with_structured_output` 返回 Pydantic 对象，拿不到 `usage_metadata` 要标「用量未知」；`expires_at` 是必填响应字段，只能真清理。
-- `app.getPath('userData')` 是 Electron API，Python 侧统一走 `deskpet/paths.py`。
-- `deskpet/tools_allowlist.py` 的 `FORBIDDEN_TOOLS` 不许放宽（含 `search_web`）；prompt / schema 保持独立可替换、`deskpet/capabilities.py` 的能力声明字段、配额重试集中在网关、检索隔离，这五个口子保持现状。
+- `app.getPath('userData')` 是 Electron API，Python 侧统一走 `apps/deskpet/backend/paths.py`。
+- `apps/deskpet/backend/tools_allowlist.py` 的 `FORBIDDEN_TOOLS` 不许放宽（含 `search_web`）；prompt / schema 保持独立可替换、`apps/deskpet/backend/capabilities.py` 的能力声明字段、配额重试集中在网关、检索隔离，这五个口子保持现状。
 
 **安全与素材**
 - Key：使用者自填 → `safeStorage` 加密存 `userData` → 启动时解密后**只注入 Python 子进程环境变量**；不进仓库、包、日志、渲染进程明文。界面只显示脱敏尾四位。
-- `client/assets/nailong/`：74 张 PNG + `manifest.json` + `ASSET-LICENSE.md` 原样保留，不改帧 / 不补帧 / 不调色；三处 CC BY 4.0 署名（根 `README.md`、`docs/RELEASE.md`、应用内「关于」）不可删。
+- `apps/deskpet/desktop/assets/nailong/`：74 张 PNG + `manifest.json` + `ASSET-LICENSE.md` 原样保留，不改帧 / 不补帧 / 不调色；三处 CC BY 4.0 署名（根 `README.md`、`docs/RELEASE.md`、应用内「关于」）不可删。
 
 **产品**
 - 每位使用者独立培养、从干净「认识你的第 1 天」开始；**禁止任何预置数据、演示故事或演示模式**。
@@ -83,13 +92,13 @@ Remove-Item Env:NAIWA_SMOKE_TEST -ErrorAction SilentlyContinue
 
 ## 5. 阶段 7 待办（打包 exe，P0 处方）
 
-**现状问题**：`client/package.json` 的 `build.files` 只有 `main.js` / `preload.js` / `assets/**/*` / `package.json`；但后端 FastAPI 与主体页面在 `deskpet/`，Python 运行时在 `.venv/`，`main.js` 还要 `cwd: ROOT` 与 `PYTHONPATH=ROOT`。**按现状打包的 exe 必然起不来。**
+**现状问题**：桌面构建已包含主进程、preload、原生点击辅助脚本、renderer 和素材，但尚未包含 `apps/deskpet/backend/`、`infrastructure/`、`config/` 与 Python 运行时。当前 `ROOT` 和 `.venv` 查找仍面向源码目录，独立安装包尚未完成。
 
 要做的：
 
-1. 把 `deskpet/`（含 `static/`）、`config/models.json`、Python 运行时纳入 `build.files` 或 `extraResources`；**同时改路径解析**，让打包后的 `ROOT` / `PYTHON` / `PYTHONPATH` 指向解包后的真实位置，不能只改配置表。
+1. 把 `apps/deskpet/backend/`、`infrastructure/`、`config/`、`apps/deskpet/desktop/renderer/`、`config/models.json`、Python 运行时纳入 `build.files` 或 `extraResources`；**同时改路径解析**，让打包后的 `ROOT` / `PYTHON` / `PYTHONPATH` 指向解包后的真实位置，不能只改配置表。
 2. 显式排除 `.env`（真实 Key），解包后全局搜 Key 字样；验证启动链不 `load_dotenv`。
-3. 顺手清 P1：`deskpet/llm.py` 的 `/api/key/status` detail 仍写「safeStorage 加密份待阶段 5 主进程注入」，实际已接线。
+3. 顺手清 P1：`apps/deskpet/backend/llm.py` 的 `/api/key/status` detail 仍写「safeStorage 加密份待阶段 5 主进程注入」，实际已接线。
 4. 发布后补 P2：README 加下载 / Release 入口。
 5. 另写一套阶段 7 验收：**无 Python 的干净机器**双击安装 → 断网走完规则版主流程 → 包里零 Key → 托盘 / 系统通知正常 → 三步演示 ≤4 分钟。
 6. 打包前跑一次 `verify.py --level full`；打包后在干净机器实测。两者都要有证据，不能互相顶替。

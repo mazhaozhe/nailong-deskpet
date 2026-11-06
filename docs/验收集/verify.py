@@ -22,8 +22,8 @@ import uuid
 from pathlib import Path
 
 BANNED_MODULES = (
-    "agent.models", "tools", "tools.coding",
-    "langchain_core", "langchain_community", "memory.cache",
+    "infrastructure.llm.models", "apps.agent.tools", "apps.agent.tools.coding",
+    "langchain_core", "langchain_community", "infrastructure.cache",
 )
 
 
@@ -37,8 +37,8 @@ def main():
     root = Path(args.root).resolve() if args.root else Path.cwd().resolve()
     result = {"level": args.level, "root": str(root), "ok": False,
               "failures": [], "checks": {}, "metrics": {}}
-    if not (root / "deskpet" / "app.py").is_file():
-        result["failures"].append("未找到 deskpet/app.py：请在项目根目录运行，或传 --root")
+    if not (root / "apps" / "deskpet" / "backend" / "app.py").is_file():
+        result["failures"].append("未找到 apps/deskpet/backend/app.py：请在项目根目录运行，或传 --root")
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 1
 
@@ -70,9 +70,9 @@ def main():
 
     try:
         from fastapi.testclient import TestClient
-        from deskpet.app import app
-        from deskpet import paths
-        import deskpet.api as api
+        from apps.deskpet.backend.app import app
+        from apps.deskpet.backend import paths
+        import apps.deskpet.backend.api as api
 
         A, B = str(uuid.uuid4()), str(uuid.uuid4())
         ca = TestClient(app, headers={"X-User-Id": A})
@@ -143,21 +143,21 @@ def main():
 
         # --- 越界静态检查 ---
         bad_imports = []
-        for p in (root / "deskpet").rglob("*.py"):
+        for p in (root / "apps" / "deskpet" / "backend").rglob("*.py"):
             for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-                if re.match(r"^\s*(from|import)\s+(tools|memory\.rag)\b", line):
+                if re.match(r"^\s*(from|import)\s+(apps\.agent\.tools|infrastructure\.retrieval\.rag)\b", line):
                     bad_imports.append("%s:%d" % (p.relative_to(root), i))
         chk("no_tools_import", not bad_imports, bad_imports[:5])
-        allow = (root / "deskpet" / "tools_allowlist.py").read_text(encoding="utf-8", errors="ignore")
+        allow = (root / "apps" / "deskpet" / "backend" / "tools_allowlist.py").read_text(encoding="utf-8", errors="ignore")
         chk("search_web_still_forbidden", "search_web" in allow and "FORBIDDEN_TOOLS" in allow)
-        left = [str(p.relative_to(root)) for p in (root / "deskpet").rglob("*.docx")]
+        left = [str(p.relative_to(root)) for p in (root / "apps" / "deskpet" / "backend").rglob("*.docx")]
         chk("no_docx_in_source", not left, left[:5])
         chk("schemas_expires_at_untouched",
-            "expires_at" in (root / "deskpet" / "schemas.py").read_text(encoding="utf-8", errors="ignore"))
+            "expires_at" in (root / "apps" / "deskpet" / "backend" / "schemas.py").read_text(encoding="utf-8", errors="ignore"))
 
         # --- 冒烟 ---
         py = root / ".venv" / "Scripts" / "python.exe"
-        r = subprocess.run([str(py), "deskpet/scripts/smoke_routes.py"],
+        r = subprocess.run([str(py), "apps/deskpet/backend/scripts/smoke_routes.py"],
                            capture_output=True, text=True, timeout=240)
         tail = (r.stdout or "")[-4000:]
         n_pass = len(re.findall(r"\bPASS\b", tail))
@@ -206,7 +206,7 @@ def http_probe(root, data_dir):
     port = s.getsockname()[1]
     s.close()
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "deskpet.app:app", "--host", "127.0.0.1",
+        [sys.executable, "-m", "uvicorn", "apps.deskpet.backend.app:app", "--host", "127.0.0.1",
          "--port", str(port), "--log-level", "error"],
         cwd=str(root), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     base = "http://127.0.0.1:%d" % port

@@ -25,7 +25,7 @@ from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from tools.coding import run_shell
+from apps.agent.tools.coding import run_shell
 
 
 class ToolCallingFakeModel(BaseChatModel):
@@ -89,7 +89,7 @@ def test_stop_task_kills_shell_process_tree(tmp_path):
         # 取消后历史里应留下孤儿 tool_calls（ assistant 声明了调用但没有
         # tool 回复）——history_repair 的存在正是为了清理它
         state = await agent.aget_state(config)
-        from agent.history_repair import find_orphans
+        from apps.agent.runtime.history_repair import find_orphans
         orphans = find_orphans(state.values["messages"])
         assert orphans, "取消后应留下孤儿 tool_calls（由 history_repair 清理）"
 

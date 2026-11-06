@@ -1,7 +1,7 @@
 """
 tests/agent/test_ui.py —— 过程框 UI 的单元测试
 =========================================
-覆盖 agent/ui.py 的纯逻辑部分：
+覆盖 apps/agent/runtime/ui.py 的纯逻辑部分：
 - shorten：框内单行截断
 - extract_answer：从消息里提取最终答案
 - LineBuffer：固定容量过程行缓冲（滚出旧行）
@@ -11,7 +11,7 @@ tests/agent/test_ui.py —— 过程框 UI 的单元测试
 
 from pathlib import Path
 
-from agent.ui import (LineBuffer, RunUI, TraceLog, extract_answer,
+from apps.agent.runtime.ui import (LineBuffer, RunUI, TraceLog, extract_answer,
                       shorten, strip_thinking)
 
 
@@ -188,7 +188,7 @@ class TestTraceLog:
 # ---------------------------------------------------------------------------
 class TestRunUI:
     def _run(self, tmp_path: Path, monkeypatch, answer: str) -> str:
-        from shared.config import settings
+        from config.settings import settings
         trace_path = tmp_path / "trace.log"
         monkeypatch.setattr(settings, "trace_file", str(trace_path))
 
@@ -218,7 +218,7 @@ class TestRunUI:
         assert "✔ 工具 calc 返回" in text
 
     def test_fail_writes_error(self, tmp_path, monkeypatch):
-        from shared.config import settings
+        from config.settings import settings
         trace_path = tmp_path / "trace.log"
         monkeypatch.setattr(settings, "trace_file", str(trace_path))
         ui = RunUI("s", "问题")

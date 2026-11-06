@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const source = fs.readFileSync(path.resolve(__dirname, '../../desktop/native-click.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../../apps/deskpet/desktop/native-click.js'), 'utf8');
 
 function setup() {
   const hooks = new Map();

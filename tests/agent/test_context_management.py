@@ -14,9 +14,9 @@ import asyncio
 import pytest
 from langchain_core.messages import HumanMessage
 
-from shared import token_tracker as tt
-from shared.config import settings
-from shared.models import ModelSpec, _window_kwargs
+from apps.agent.runtime import token_tracker as tt
+from config.settings import settings
+from infrastructure.llm.models import ModelSpec, _window_kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ class _FakeModel:
 
 class TestSummarizeTriggerWiring:
     def test_with_window_profile(self):
-        from agent.core import _summarize_trigger
+        from apps.agent.runtime.core import _summarize_trigger
         model = _FakeModel(profile={"max_input_tokens": 131072},
                            max_tokens=8192)
         kind, value = _summarize_trigger(model)
@@ -209,7 +209,7 @@ class TestSummarizeTriggerWiring:
 
     def test_reasoner_bigger_output_lower_trigger(self):
         """reasoner 输出上限 32K → 触发点应显著低于 chat 的 8K。"""
-        from agent.core import _summarize_trigger
+        from apps.agent.runtime.core import _summarize_trigger
         chat = _summarize_trigger(
             _FakeModel(profile={"max_input_tokens": 131072}, max_tokens=8192))[1]
         reasoner = _summarize_trigger(
@@ -219,12 +219,12 @@ class TestSummarizeTriggerWiring:
         assert chat - reasoner >= 32768 - 8192 - 100  # 静态开销两者相同
 
     def test_no_profile_falls_back_to_absolute(self):
-        from agent.core import _summarize_trigger
+        from apps.agent.runtime.core import _summarize_trigger
         assert _summarize_trigger(_FakeModel()) == (
             "tokens", settings.summarize_trigger_tokens)
 
     def test_profile_without_window_falls_back(self):
-        from agent.core import _summarize_trigger
+        from apps.agent.runtime.core import _summarize_trigger
         model = _FakeModel(profile={"max_output_tokens": 8192}, max_tokens=8192)
         assert _summarize_trigger(model) == (
             "tokens", settings.summarize_trigger_tokens)

@@ -1,1 +1,0 @@
-"""deskpet.scripts 包"""

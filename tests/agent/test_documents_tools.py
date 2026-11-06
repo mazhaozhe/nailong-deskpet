@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from tools.documents import gen_docx, gen_pptx, gen_xlsx, _add_runs
-from tools.coding import write_file
+from apps.agent.tools.documents import gen_docx, gen_pptx, gen_xlsx, _add_runs
+from apps.agent.tools.coding import write_file
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """
 tests/agent/test_search.py —— 联网搜索工具测试
 ========================================
-覆盖 tools/search.py 的多源级联与熔断冷却（全部 mock 网络，不真实联网）：
+覆盖 apps/agent/tools/search.py 的多源级联与熔断冷却（全部 mock 网络，不真实联网）：
 
 - 天气类查询 → Open-Meteo 结构化数据（识别城市、输出实况/今日预报）
 - 通用查询 → Bing 中国站 RSS 解析
@@ -16,7 +16,7 @@ tests/agent/test_search.py —— 联网搜索工具测试
 
 import pytest
 
-import tools.search as search  # noqa: E402
+import apps.agent.tools.search as search  # noqa: E402
 
 BING_XML = """<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"><channel>

@@ -1,7 +1,7 @@
 """tests/backend/test_deskpet_llm.py —— 阶段 3 模型层测试（自动+假 Key 档，不接真实 API）
 
 附录 B 口径：「自动 + 有 Key」一律用假 Key 经注入环境变量
-DEEPSEEK_API_KEY（= deskpet.llm.KEY_ENV，来自 config/models.json 的
+DEEPSEEK_API_KEY（= apps.deskpet.backend.llm.KEY_ENV，来自 config/models.json 的
 api_key_env）注入来验，不接真实 API、不发真实请求——ModelManager
 被替换成 FakeManager，FakeModel 只回固定 schema 结果 / 定向异常。
 
@@ -93,9 +93,9 @@ class FakeManager:
 
 
 def _patch_model_layer(monkeypatch, specs):
-    """把 shared.models.ModelManager 换成返回 FakeManager 的工厂。"""
+    """把 infrastructure.llm.models.ModelManager 换成返回 FakeManager 的工厂。"""
     mgr = FakeManager(specs)
-    import shared.models as am
+    import infrastructure.llm.models as am
     monkeypatch.setattr(am, "ModelManager", lambda catalog_path=None: mgr)
     return mgr
 
@@ -108,7 +108,7 @@ def env(tmp_path, monkeypatch):
     """独立数据目录 + 清 KEY + gateway/计数器复位（每个测试干净开局）。"""
     monkeypatch.setenv("DESKPET_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    from deskpet import llm, model_counter
+    from apps.deskpet.backend import llm, model_counter
     llm.gateway.reset()
     model_counter.reset()
     return tmp_path
@@ -117,9 +117,9 @@ def env(tmp_path, monkeypatch):
 def _client():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from deskpet.api import router, download_router
-    from deskpet.auth import auth_middleware
-    from deskpet.games.builtin.mini_snake import register
+    from apps.deskpet.backend.api import router, download_router
+    from apps.deskpet.backend.auth import auth_middleware
+    from apps.deskpet.backend.games.builtin.mini_snake import register
     app = FastAPI()
     app.middleware("http")(auth_middleware)
     app.include_router(router)
@@ -135,20 +135,20 @@ def _inject_key(monkeypatch, key=FAKE_KEY):
 
 
 def _write_settings(data_dir, **kv):
-    from deskpet import paths
+    from apps.deskpet.backend import paths
     p = paths.get_settings_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(kv, ensure_ascii=False), encoding="utf-8")
 
 
 def _cost_entries():
-    from deskpet import cost
+    from apps.deskpet.backend import cost
     return cost.recent_entries(limit=100)
 
 
 def _primary_specs(primary_behavior, fallback_behavior=None):
     """主力 + ollama 兜底两档的标准 specs（目录 id 与 config/models.json 一致）。"""
-    from deskpet import llm
+    from apps.deskpet.backend import llm
     return {
         llm.PRIMARY_ID: FakeModel(primary_behavior),
         llm.MANUAL_ID: FakeModel(primary_behavior),
@@ -182,7 +182,7 @@ def test_auto_without_key_silently_degrades(env):
     body = r.json()
     assert body["degraded"] is True
     assert "自动档未探测到 Key" in body["degrade_reason"]
-    from deskpet import model_counter
+    from apps.deskpet.backend import model_counter
     assert model_counter.total() == 0
 
 
@@ -196,7 +196,7 @@ def test_on_without_key_reports_clear_reason(env):
     body = r.json()
     assert body["degraded"] is True
     assert "开关=开但未配置 Key" in body["degrade_reason"]
-    from deskpet import model_counter
+    from apps.deskpet.backend import model_counter
     assert model_counter.total() == 0
 
 
@@ -204,7 +204,7 @@ def test_on_without_key_reports_clear_reason(env):
 # 2. 自动 + 假 Key：固定 JSON schema 输出 + 计数 + 缓存懒加载
 # ---------------------------------------------------------------------------
 def _notice_parsed():
-    from deskpet.models import ChecklistItem, NoticeParseResult
+    from apps.deskpet.backend.models import ChecklistItem, NoticeParseResult
     return NoticeParseResult(
         items=[ChecklistItem(text="提交博客", category="deliverable"),
                ChecklistItem(text="含合照", category="format")],
@@ -214,7 +214,7 @@ def _notice_parsed():
 def test_auto_with_fake_key_uses_model(env, monkeypatch):
     """自动 + 假 Key（附录 B）：走模型，degraded=False，计数 1，
     缓存以注入路径懒加载启用（enable_llm_cache 传 db_path）。"""
-    from deskpet import llm, model_counter, paths
+    from apps.deskpet.backend import llm, model_counter, paths
     _inject_key(monkeypatch)
     _patch_model_layer(monkeypatch, _primary_specs({
         "parsed_for": {"NoticeParseResult": _notice_parsed()},
@@ -239,7 +239,7 @@ def test_auto_with_fake_key_uses_model(env, monkeypatch):
 
 def test_use_v4_pro_switches_to_manual_model(env, monkeypatch):
     """use_v4_pro=True → manager 切到 deepseek-reasoner（v4-pro 手动档）。"""
-    from deskpet import llm
+    from apps.deskpet.backend import llm
     _inject_key(monkeypatch)
     mgr = _patch_model_layer(monkeypatch, _primary_specs({
         "parsed_for": {"NoticeParseResult": _notice_parsed()},
@@ -253,7 +253,7 @@ def test_use_v4_pro_switches_to_manual_model(env, monkeypatch):
 
 def test_usage_unknown_recorded_not_fabricated(env, monkeypatch):
     """usage_metadata 拿不到 → 如实标「用量未知」，绝不编数字凑成本。"""
-    from deskpet import cost
+    from apps.deskpet.backend import cost
     _inject_key(monkeypatch)
     _patch_model_layer(monkeypatch, _primary_specs(
         {"parsed_for": {"NoticeParseResult": _notice_parsed()},
@@ -273,7 +273,7 @@ def test_usage_unknown_recorded_not_fabricated(env, monkeypatch):
 # 3. 错误归类（401 / 余额 / 网络分别报）+ 降级链
 # ---------------------------------------------------------------------------
 def test_classify_error_three_kinds():
-    from deskpet.llm import classify_error
+    from apps.deskpet.backend.llm import classify_error
     assert classify_error(RuntimeError("401 Unauthorized"))[0] == "key_invalid"
     assert classify_error(RuntimeError("402 Insufficient balance"))[0] == "balance"
     assert classify_error(RuntimeError("余额不足"))[0] == "balance"
@@ -285,7 +285,7 @@ def test_classify_error_three_kinds():
 def test_on_state_401_then_ollama_fallback_then_rules(env, monkeypatch):
     """开 + Key 无效：401 如实报 → ollama-local 兜底也失败 → 回规则版，
     degrade_reason 必须把两级原因说清楚，不假装成功。"""
-    from deskpet import llm
+    from apps.deskpet.backend import llm
     _inject_key(monkeypatch)
     _write_settings(env, model_switch="on")
     _patch_model_layer(monkeypatch, _primary_specs(
@@ -301,7 +301,7 @@ def test_on_state_401_then_ollama_fallback_then_rules(env, monkeypatch):
     assert "ollama" in body["degrade_reason"]
     assert body["data"]["items"], "规则版兜底仍有产出"
     # 通信类错误不消耗校验重试：主力 1 次 + ollama 兜底 1 次
-    from deskpet import model_counter
+    from apps.deskpet.backend import model_counter
     assert model_counter.by_route()["notice/parse"] == 1
     assert model_counter.by_route()["notice/parse#ollama-fallback"] == 1
 
@@ -319,7 +319,7 @@ def test_validation_retry_then_fallback_to_default_strategy(env, monkeypatch):
     assert body["data"]["strategy_name"] == "balanced"  # 默认规则兜底
     assert "校验失败" in body["degrade_reason"]
     # 主力重试 2 次（方案 B ≤2 收敛）+ ollama 1 次
-    from deskpet import model_counter
+    from apps.deskpet.backend import model_counter
     assert model_counter.by_route()["game/strategy"] == 2
     assert model_counter.by_route()["game/strategy#ollama-fallback"] == 1
 
@@ -329,7 +329,7 @@ def test_validation_retry_then_fallback_to_default_strategy(env, monkeypatch):
 # ---------------------------------------------------------------------------
 def test_daily_cap_blocks_before_call(env, monkeypatch):
     """今日成本已达每日上限 → 调用前拦下（不烧钱），原因带数字。"""
-    from deskpet import cost, model_counter
+    from apps.deskpet.backend import cost, model_counter
     _inject_key(monkeypatch)
     # 先垫今日账本：flash 1000+1000 tok = 0.005 元 ≥ 上限 0.001 元
     cost.record_usage("seed", "deepseek-chat",
@@ -370,7 +370,7 @@ def test_per_call_cap_degrades_after_huge_usage(env, monkeypatch):
 # ---------------------------------------------------------------------------
 def test_game_session_cap_three(env, monkeypatch):
     """单局（策略+复盘共用计数）模型调用 ≤3，超限回默认规则。"""
-    from deskpet.models import GameStrategy
+    from apps.deskpet.backend.models import GameStrategy
 
     def _strategy():
         return GameStrategy(strategy_name="aggressive",
@@ -392,13 +392,13 @@ def test_game_session_cap_three(env, monkeypatch):
     assert body["degraded"] is True
     assert "上限" in body["degrade_reason"]
     assert body["data"]["strategy_name"] == "balanced"   # 默认规则兜底
-    from deskpet import model_counter
+    from apps.deskpet.backend import model_counter
     assert model_counter.by_route()["game/strategy"] == 3
 
 
 def test_game_review_writes_memory_only_with_game_id(env, monkeypatch):
     """复盘结论写入 GameMemory（final_state 带 game_id 才写，不编造）。"""
-    from deskpet.models import GameReview
+    from apps.deskpet.backend.models import GameReview
 
     def _review():
         return GameReview(lost_at="后期贪快", next_change="中期收一次",
@@ -489,7 +489,7 @@ def test_key_check_not_configured_without_key(env):
 def test_capabilities_registry_declares_four_fields():
     """五项能力每项都声明 requires_network/requires_key/
     degraded_fallback/enabled 四字段；游戏项带单局上限。"""
-    from deskpet import capabilities
+    from apps.deskpet.backend import capabilities
     assert len(capabilities.all_capabilities()) >= 5
     for cap in capabilities.all_capabilities():
         assert isinstance(cap.requires_network, bool)
@@ -514,18 +514,18 @@ def test_capabilities_endpoint_lists_quota(env):
 
 
 def test_llm_module_top_level_stays_lazy():
-    """懒加载铁闸静态自检：deskpet/llm.py 顶层不得出现
-    shared.models / langchain / shared.cache / tools 的 import
+    """懒加载铁闸静态自检：apps/deskpet/backend/llm.py 顶层不得出现
+    infrastructure.llm.models / langchain / infrastructure.cache / tools 的 import
     （它们只允许出现在函数体内的懒加载点）。"""
     src = Path(__file__).resolve().parents[2].joinpath(
-        "deskpet", "llm.py").read_text(encoding="utf-8")
+        "apps", "deskpet", "backend", "llm.py").read_text(encoding="utf-8")
     for line in src.splitlines():
         if line.startswith(("import ", "from ")):   # 顶层（无缩进）
             low = line.lower()
-            assert "shared.models" not in low, f"顶层 import 打穿关态闸门：{line}"
+            assert "infrastructure.llm.models" not in low, f"顶层 import 打穿关态闸门：{line}"
             assert "langchain" not in low, f"顶层 import 打穿关态闸门：{line}"
-            assert "shared.cache" not in low, f"顶层 import 打穿关态闸门：{line}"
-            assert not low.startswith(("from tools", "import tools")), \
+            assert "infrastructure.cache" not in low, f"顶层 import 打穿关态闸门：{line}"
+            assert not low.startswith(("from apps.agent.tools", "import apps.agent.tools")), \
                 f"顶层 import 禁用工具包：{line}"
 
 
@@ -535,7 +535,7 @@ def test_llm_module_top_level_stays_lazy():
 def test_from_voice_and_task_qa_model_and_fallback(env, monkeypatch):
     """自动+假 Key：from-voice/task-qa 走模型出固定 JSON；
     切「关」后：from-voice 规则兜底、task-qa 静态兜底，绝不 500。"""
-    from deskpet.models import TaskQAAnswer, VoiceParseResult
+    from apps.deskpet.backend.models import TaskQAAnswer, VoiceParseResult
     _inject_key(monkeypatch)
     _patch_model_layer(monkeypatch, _primary_specs({
         "parsed_for": {
@@ -576,5 +576,5 @@ def test_from_voice_and_task_qa_model_and_fallback(env, monkeypatch):
     assert r.status_code == 200
     assert r.json()["type"] == "degrade"
     assert "还差合照" in r.json()["content"]      # 静态兜底带任务上下文
-    from deskpet import model_counter
+    from apps.deskpet.backend import model_counter
     assert model_counter.total() == 2   # 关掉之后零新增调用

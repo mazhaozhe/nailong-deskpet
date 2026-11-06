@@ -5,7 +5,7 @@ P0-2 deadline 落库：贴「11/8 23:59 前提交博客」→ 待办 deadline �
      模拟第 9 天 → 补报 overdue 出现该项
 P0-3 模拟态按用户隔离：A 模拟 30 天不影响 B；A 清除后回真实；
      SQLite first_seen 不变
-（P0-4 在 test_deskpet_no_model.py，P0-5 由其 tools.coding 断言覆盖）
+（P0-4 在 test_deskpet_no_model.py，P0-5 由其 apps.agent.tools.coding 断言覆盖）
 
 Step 0-1 陈旧 hint：带日期 parse → 无日期 parse → confirm 不带 override
      → 落库 deadline 必须为 null（上一条 hint 不串到不相关待办）；
@@ -29,13 +29,13 @@ def client(tmp_path, monkeypatch):
 
     DESKPET_DATA_DIR 注入：导出物落 tmp，绝不碰源码目录或真实用户目录。
     """
-    import deskpet.storage as storage
+    import apps.deskpet.backend.storage as storage
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setenv("DESKPET_DATA_DIR", str(tmp_path / "data"))
 
-    from deskpet.api import router, download_router
-    from deskpet.auth import auth_middleware
-    from deskpet.games.builtin.mini_snake import register
+    from apps.deskpet.backend.api import router, download_router
+    from apps.deskpet.backend.auth import auth_middleware
+    from apps.deskpet.backend.games.builtin.mini_snake import register
     register()
 
     app = FastAPI()
@@ -51,7 +51,7 @@ def _uid() -> str:
 
 
 def _cleanup(url: str) -> None:
-    from deskpet import paths
+    from apps.deskpet.backend import paths
     name = url.rsplit("/", 1)[-1]
     p = paths.get_exports_dir() / name
     p.unlink(missing_ok=True)
@@ -175,7 +175,7 @@ def test_p0_3_simulation_isolated_per_user(client):
     assert after["first_seen"] == first_seen_a, "first_seen 不得被模拟改写"
 
     # 持久层复核：SQLite 里的 first_seen 与清除前一致
-    import deskpet.storage as storage
+    import apps.deskpet.backend.storage as storage
     uid_a = None
     # 从 growth 表反查不出 uid 的话直接用 API 的 header uid
     # ——用更直接的办法：再 simulate 一次确认可重复设置/清除
@@ -248,7 +248,7 @@ def test_step0_1_hint_not_shared_across_users(client):
 
 def test_step0_1_no_module_level_hint_state():
     """不依赖进程内存：api 模块里不允许再存在 hint 全局字典。"""
-    import deskpet.api as api
+    import apps.deskpet.backend.api as api
     assert not hasattr(api, "_last_deadline_hint"), (
         "_last_deadline_hint 全局字典必须整个移除（Step 0-1 裁决）")
 
@@ -263,10 +263,10 @@ def test_step0_2_real_app_static_exports_not_served(tmp_path, monkeypatch):
     MIME/PK 魔数/bytes 正确；目录列举 404。
     """
     monkeypatch.setenv("DESKPET_DATA_DIR", str(tmp_path / "data"))
-    import deskpet.storage as storage
+    import apps.deskpet.backend.storage as storage
     monkeypatch.setattr(storage, "DB_PATH", tmp_path / "test.db")
 
-    from deskpet.app import create_app
+    from apps.deskpet.backend.app import create_app
     app = create_app()
     client = TestClient(app, headers={"X-User-Id": _uid()})
 
@@ -304,7 +304,7 @@ def test_step0_2_expired_export_returns_410_and_purged(client, tmp_path):
 
     # 篡改 mtime 到 2 小时前（模拟过期）
     import os
-    from deskpet import paths
+    from apps.deskpet.backend import paths
     p = paths.get_exports_dir() / fname
     old = datetime.now().timestamp() - 7200
     os.utime(p, (old, old))
@@ -318,7 +318,7 @@ def test_step0_2_expired_export_returns_410_and_purged(client, tmp_path):
     p2 = paths.get_exports_dir() / f"deskpet_export_{uuid_mod.uuid4().hex[:8]}.docx"
     p2.write_bytes(b"PK\x03\x04stale")
     os.utime(p2, (old, old))
-    from deskpet.api import cleanup_expired_exports
+    from apps.deskpet.backend.api import cleanup_expired_exports
     assert cleanup_expired_exports() >= 1
     assert not p2.exists()
 
@@ -333,7 +333,7 @@ def _read_docx(path):
 
 def test_p1_docx_title_not_duplicated(tmp_path):
     """title 参数 + markdown 首行 # title 不再各渲染一次。"""
-    from deskpet.docx_gen import markdown_to_docx
+    from apps.deskpet.backend.docx_gen import markdown_to_docx
     md = tmp_path / "t.md"
     md.write_text("# 待办交付清单\n\n- □ **交博客**\n", encoding="utf-8")
     out = tmp_path / "t.docx"
@@ -346,7 +346,7 @@ def test_p1_docx_title_not_duplicated(tmp_path):
 
 def test_p1_docx_indented_bullet_is_list_item(tmp_path):
     """「  - 截止：…」前导空格也应走列表样式，不是带 - 的普通段落。"""
-    from deskpet.docx_gen import markdown_to_docx
+    from apps.deskpet.backend.docx_gen import markdown_to_docx
     md = tmp_path / "t.md"
     md.write_text(
         "# 清单\n\n- □ **交博客**\n  - 截止：2026-11-08 23:59\n"

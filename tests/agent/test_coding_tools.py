@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from tools.coding import edit_file, list_dir, read_file, run_shell, write_file
+from apps.agent.tools.coding import edit_file, list_dir, read_file, run_shell, write_file
 
 
 def test_write_and_read_roundtrip(tmp_path):

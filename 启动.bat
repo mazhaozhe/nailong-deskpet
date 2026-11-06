@@ -1,2 +1,2 @@
 @echo off
-call "%~dp0desktop\start.bat"
+call "%~dp0apps\deskpet\desktop\start.bat"

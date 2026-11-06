@@ -1,7 +1,7 @@
-// Adapted from d4x1/petex test/drag.test.cjs (Apache-2.0). Import path changed; see desktop/vendor/petex/SOURCE.md.
+// Adapted from d4x1/petex test/drag.test.cjs (Apache-2.0). Import path changed; see apps/deskpet/desktop/vendor/petex/SOURCE.md.
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {DragTracker}=require('../../desktop/vendor/petex/drag.cjs');
+const {DragTracker}=require('../../apps/deskpet/desktop/vendor/petex/drag.cjs');
 const sector=state=>Math.round(((Math.atan2(state.gaze.x,-state.gaze.y)+Math.PI*2)%(Math.PI*2))/(Math.PI/8))%16;
 const tracker=()=>new DragTracker({x:100,y:100},{x:40,y:30},0);
 test('dragging ignores press jitter and preserves the initial grab offset',()=>{

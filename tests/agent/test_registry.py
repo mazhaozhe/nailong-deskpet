@@ -7,7 +7,7 @@ tests/agent/test_registry.py —— 工具注册表测试（防幻觉核心逻�
 import pytest
 from langchain.tools import tool
 
-from tools.registry import TOOL_REGISTRY, all_tools, register, resolve_tool, suggest_tools
+from apps.agent.tools.registry import TOOL_REGISTRY, all_tools, register, resolve_tool, suggest_tools
 
 
 def test_builtin_tools_registered():

@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const source = fs.readFileSync(path.resolve(__dirname, '../../desktop/renderer/app.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../../apps/deskpet/desktop/renderer/app.js'), 'utf8');
 function setup() {
   const nodes = new Map();
   const timers = new Map();

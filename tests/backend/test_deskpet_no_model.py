@@ -2,12 +2,12 @@
 
 阶段 3 起语义升级：不再断言「阶段 2 不碰模型」，而是断言
 「开关=关（或自动+无 Key）时零模型层 import、零调用」——
-关态懒加载铁闸（deskpet/llm.py 顶层零 langchain 系 import）的证据链。
+关态懒加载铁闸（apps/deskpet/backend/llm.py 顶层零 langchain 系 import）的证据链。
 
 证据链（P0-4 返工后保留）：
   1. sys.modules 断言（子进程隔离，跑完含导出 docx 的主流程后检查）：
-     shared.models / tools.coding / langchain chat model 基类都不应进进程。
-     「导出之后」时点也要干净——方案 A（deskpet/docx_gen 纯函数）保证。
+     infrastructure.llm.models / apps.agent.tools.coding / langchain chat model 基类都不应进进程。
+     「导出之后」时点也要干净——方案 A（apps/deskpet/backend/docx_gen 纯函数）保证。
   2. 真 monkeypatch 拦截：patch 掉 langchain chat model 的 invoke/ainvoke
      入口，被调即抛 AssertionError。附 patch 生效自检——故意调一次被
      patch 的函数确认抛错，排除「patch 了从未被调用的路径」的假绿。
@@ -26,7 +26,7 @@ import sys
 import pytest
 
 # 子进程里跑的主流程脚本：清 KEY + 设开关=关 → 建待办 → 补报 → 贴通知 →
-# 确认落待办 → 勾选 → 导出 docx（关键时点：导出最容易把 tools.coding/
+# 确认落待办 → 勾选 → 导出 docx（关键时点：导出最容易把 apps.agent.tools.coding/
 # langchain 拖进进程）→ 游戏策略/复盘降级路由也打一遍 → 打印 sys.modules。
 _SUBPROCESS_CODE = r"""
 import sys, json, os, tempfile
@@ -35,10 +35,10 @@ os.environ["DESKPET_DATA_DIR"] = tempfile.mkdtemp(prefix="deskpet-sub-")
 os.environ.pop("DEEPSEEK_API_KEY", None)   # 关态口径：清 KEY（附录A-2）
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from deskpet.api import router, download_router
-from deskpet.auth import auth_middleware
-from deskpet.games.builtin.mini_snake import register
-from deskpet import settings
+from apps.deskpet.backend.api import router, download_router
+from apps.deskpet.backend.auth import auth_middleware
+from apps.deskpet.backend.games.builtin.mini_snake import register
+from apps.deskpet.backend import settings
 
 settings.set_switch(settings.SWITCH_OFF)   # 关态口径：显式设「关」
 
@@ -74,10 +74,10 @@ assert r.status_code == 200, r.text
 r = c.get(r.json()["download_url"]); assert r.status_code == 200
 
 print(json.dumps({
-    "agent_models": [m for m in sys.modules if m == "shared.models"],
-    "memory_cache": [m for m in sys.modules if m == "shared.cache"],
-    "tools_coding": [m for m in sys.modules if m == "tools.coding"],
-    "tools_pkg_init": [m for m in sys.modules if m == "tools"],
+    "agent_models": [m for m in sys.modules if m == "infrastructure.llm.models"],
+    "memory_cache": [m for m in sys.modules if m == "infrastructure.cache"],
+    "tools_coding": [m for m in sys.modules if m == "apps.agent.tools.coding"],
+    "tools_pkg_init": [m for m in sys.modules if m == "apps.agent.tools"],
     "lc_chat": [m for m in sys.modules
                 if m.startswith("langchain")
                 and ("language_models" in m or "chat_models" in m)],
@@ -99,11 +99,11 @@ def test_import_and_full_flow_keep_model_layer_out():
     assert r.returncode == 0, f"子进程失败:\n{r.stdout}\n{r.stderr}"
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert not out["agent_models"], (
-        f"shared.models 被拉进进程：{out['agent_models']}")
+        f"infrastructure.llm.models 被拉进进程：{out['agent_models']}")
     assert not out["memory_cache"], (
-        f"shared.cache 被拉进进程：{out['memory_cache']}——关态绝不能启用缓存")
+        f"infrastructure.cache 被拉进进程：{out['memory_cache']}——关态绝不能启用缓存")
     assert not out["tools_coding"], (
-        f"tools.coding(run_shell 所在模块) 被拉进进程：{out['tools_coding']}——"
+        f"apps.agent.tools.coding(run_shell 所在模块) 被拉进进程：{out['tools_coding']}——"
         f"违反方案 A 隔离导入口径")
     assert not out["tools_pkg_init"], (
         f"tools 包根(__init__) 被拉进进程：{out['tools_pkg_init']}——"
@@ -118,7 +118,7 @@ def test_model_counter_is_zero_after_import():
     P1 返修（阶段 4）：旧写法先 reset() 再断言 0，断言恒真、测不出
     「import 本身产生调用」。改用子进程隔离（照抄同文件
     test_import_and_full_flow_keep_model_layer_out 的写法）：
-    干净子进程里 import deskpet.api 后直接断言 total()==0，
+    干净子进程里 import apps.deskpet.backend.api 后直接断言 total()==0，
     不用 reset 掩盖。测试意图不变：import 不应产生任何模型调用。
     """
     code = r"""
@@ -126,8 +126,8 @@ import sys, json, os, tempfile
 sys.path.insert(0, ".")
 os.environ["DESKPET_DATA_DIR"] = tempfile.mkdtemp(prefix="deskpet-sub-")
 os.environ.pop("DEEPSEEK_API_KEY", None)
-import deskpet.api
-from deskpet import model_counter
+import apps.deskpet.backend.api
+from apps.deskpet.backend import model_counter
 print(json.dumps({"total": model_counter.total(),
                   "by_route": model_counter.by_route()}))
 """
@@ -169,10 +169,10 @@ def test_main_flow_model_call_blocked(monkeypatch, tmp_path):
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from deskpet.api import router, download_router
-    from deskpet.auth import auth_middleware
-    from deskpet import model_counter, settings
-    from deskpet.games.builtin.mini_snake import register
+    from apps.deskpet.backend.api import router, download_router
+    from apps.deskpet.backend.auth import auth_middleware
+    from apps.deskpet.backend import model_counter, settings
+    from apps.deskpet.backend.games.builtin.mini_snake import register
 
     # 显式设「关」（附录A-2：清 KEY 与设关两者都做）
     settings.set_switch(settings.SWITCH_OFF)
