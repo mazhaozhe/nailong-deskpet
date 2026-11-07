@@ -21,11 +21,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 from apps.deskpet.backend import clock
+from apps.deskpet.backend.paths import get_data_dir
 from apps.deskpet.backend.models import (
     GrowthState, PersonaStage, TodoItem, TodoStatus,
 )
 
-DB_PATH = Path("data/deskpet.db")
+# 业务库跟导出物 / 缓存 / 设置走同一个用户数据目录（阶段 7 打包收口）：
+# 原来写死 Path("data/deskpet.db") 是相对 cwd 的，装到 C:\Program Files 这类
+# 只读安装目录时 cwd 写不进，新建待办当场失败。Electron 启动后端时注入
+# DESKPET_DATA_DIR = userData/deskpet，这里直接复用同一入口，不再各写一份路径。
+DB_PATH = get_data_dir() / "deskpet.db"
 BUSY_TIMEOUT_MS = 5000
 
 

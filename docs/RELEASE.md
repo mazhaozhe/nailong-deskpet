@@ -12,6 +12,19 @@
 - **自由闲聊与 Agent 模式为可选能力，默认关闭**：Agent 模式启用完整工具链与联网能力，危险工具需弹窗审批、60 秒未响应默认拒绝，检索结果有域名白名单与注入清洗。
 - **不含任何预置数据、演示故事或假历史**：每位使用者从干净的第 1 天独立培养，现场展示的是本机真实状态。
 
+## 安装与启动（Windows，两步）
+
+1. 从 [GitHub Releases](https://github.com/mazhaozhe/nailong-deskpet/releases) 下载 `奶龙桌宠 Setup 1.0.0.exe`，双击安装（可自选安装目录）。
+2. 安装完成后双击桌面上的「奶龙桌宠」。
+
+**无需安装 Python、无需 pip、无需 API Key、无需联网**即可跑完整规则版主流程：贴通知 → 拆清单 → 落待办 → 导出 docx。安装包自带裁剪后的 Python 运行时（解释器 + 标准库 + 运行依赖），装完即用。
+
+- **安装包体积约 140 MB**（解压后约 480 MB）：体积主要来自 Electron 运行时与内置 Python 运行环境。下载慢是正常的，请预留时间；GitHub Release 单文件上限 2 GB，不受影响。
+- 安装到 `C:\Program Files` 这类只读目录也可以正常用：业务数据（待办、成长、导出物、成本账本）写在 `%APPDATA%\nailong-deskpet-client\deskpet\`，不写安装目录。
+- 卸载时默认保留上面这个数据目录；要彻底清空请卸载后手动删除它。
+- **Key 只在开模型档 / Agent 模式时才需要**：默认「自动」档没有 Key 就走规则版，不会报错、不会假装成功。Key 在应用内「设置」填写，由系统加密保存在本机，只注入本地 Python 子进程的环境变量，不进日志、不进渲染进程、不进安装包。
+- 安装包未做代码签名，首次运行可能触发 Windows SmartScreen「更多信息 → 仍要运行」。
+
 ## 奶龙图像素材与授权
 
 - 素材与动作表来源：[zhangkk833-byte/dsh-nailong-pet](https://github.com/zhangkk833-byte/dsh-nailong-pet)。
@@ -29,4 +42,8 @@
 
 ## 当前发布状态
 
-**尚未执行打包或发布**：仓库当前提供可直接在本机运行的源码，启动方式见 `README.md` 第二节。Windows 安装包、内置 Python 运行时、签名与杀软适配留待阶段 7；届时须把后端与 Python 运行时纳入打包、让业务库落可写的用户数据目录、显式排除 `.env`，并在无 Python 的干净机器上另做一套验收。exe 发布后从本仓库的 Releases 页面下载。
+**阶段 7 已打包完成**：`npm run dist`（在 `apps/deskpet/desktop/` 下）产出 NSIS 安装包 `dist/奶龙桌宠 Setup 1.0.0.exe`，约 140 MB，内置 Python 运行时，使用者无需任何环境准备。
+
+- 打包前会自动组装包内运行时（`scripts/assemble-runtime.mjs`，从本机 base Python 拷解释器 + 标准库 + DLL，再挂 `.venv` 的运行依赖），产物在 `apps/deskpet/desktop/build-runtime/`，不随仓库提交。
+- 源码开发态仍走本机 `.venv`（`npm start` 不变）；打包态只认包内 `resources\runtime\python.exe`，缺了就提示重新安装，不会回退到系统 Python。
+- 安装包尚未上传 Releases，上传由项目维护者在本地完成；签名与杀软适配留待后续。已在本机只读安装目录 + PATH 中剔除 Python 的环境做过实测（安装版自检 `DESKTOP_SMOKE pass:true`、包内解释器 `import fastapi/uvicorn/docx/langchain` 通过、新建待办重启后仍在）。

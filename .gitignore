@@ -27,6 +27,7 @@ data/
 node_modules/
 apps/deskpet/desktop/node_modules/
 apps/deskpet/desktop/dist/
+apps/deskpet/desktop/build-runtime/
 npm-debug.log*
 
 # 系统文件

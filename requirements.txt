@@ -1,7 +1,9 @@
 # ============================================================
-# GeneralTaskAgent 基础依赖（必装）
+# 奶龙桌宠（Desktop Pet）运行依赖
 # Python 版本要求：3.10 ~ 3.13（暂不支持 3.14，部分依赖无对应 wheel）
 # 安装：pip install -r requirements.txt
+# 启动后端：uvicorn apps.deskpet.backend.app:app --host 127.0.0.1 --port 8000
+# 桌面端启动见 README 第二节（npm start，由主进程自动拉起后端）
 # ============================================================
 
 # --- Agent 框架（create_agent + 内置中间件）---

@@ -3,7 +3,7 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { createInterface } = require('node:readline');
 
-function installNativeClick(win, screen, open, python) {
+function installNativeClick(win, screen, open, python, mouseScript) {
   let press = null;
   let generation = 0;
   // 会话 5：把「往上拖」也变成一条动作命令（结构化对象，渲染层按 type 分发）。
@@ -14,7 +14,10 @@ function installNativeClick(win, screen, open, python) {
     if (win.isDestroyed()) return;
     win.webContents.send('pet:command', command);
   }
-  const watcher = spawn(python, ['-u', path.join(__dirname, 'native_mouse.py')], {
+  // mouseScript 由主进程给：打包态必须在 asar 之外（Python 读不到 asar 内的文件），
+  // 开发态就是 __dirname 下这一份。解释器同理——打包态是包内 runtime，不是系统 Python。
+  const scriptPath = mouseScript || path.join(__dirname, 'native_mouse.py');
+  const watcher = spawn(python, ['-u', scriptPath], {
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe']
   });

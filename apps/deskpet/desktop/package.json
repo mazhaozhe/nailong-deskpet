@@ -7,7 +7,10 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "runtime": "node scripts/assemble-runtime.mjs",
+    "prepack": "node scripts/assemble-runtime.mjs",
     "pack": "electron-builder --dir",
+    "predist": "node scripts/assemble-runtime.mjs",
     "dist": "electron-builder --win nsis",
     "test": "node --test ../../../tests/desktop/test_pet_drag.cjs ../../../tests/desktop/test_petex_drag.cjs ../../../tests/desktop/test_native_click.cjs ../../../tests/desktop/test_actions.cjs",
     "test:window": "electron ../../../tests/desktop/test_pet_drag_electron.cjs"
@@ -22,24 +25,69 @@
     "directories": {
       "output": "dist"
     },
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "files": [
       "main.js",
       "preload.js",
       "native-click.js",
       "native_mouse.py",
+      "approval-dialog.html",
+      "approval-dialog-preload.js",
+      "key-dialog.html",
+      "key-dialog-preload.js",
       "vendor/petex/drag.cjs",
       "vendor/petex/LICENSE",
       "vendor/petex/SOURCE.md",
       "assets/**/*",
       "renderer/**/*",
-      "package.json"
+      "package.json",
+      "!**/.env"
+    ],
+    "extraResources": [
+      {
+        "from": "../../..",
+        "to": "approot",
+        "filter": [
+          "apps/deskpet/backend/**/*",
+          "apps/deskpet/desktop/renderer/**/*",
+          "apps/deskpet/desktop/assets/**/*",
+          "apps/deskpet/desktop/native_mouse.py",
+          "apps/agent/**/*",
+          "infrastructure/**/*",
+          "config/**/*",
+          "requirements.txt",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo",
+          "!**/*.log",
+          "!**/.env",
+          "!**/data/**",
+          "!**/logs/**",
+          "!**/*.sqlite*"
+        ]
+      },
+      {
+        "from": "build-runtime/runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "zh_CN"
+      ]
     }
   }
 }

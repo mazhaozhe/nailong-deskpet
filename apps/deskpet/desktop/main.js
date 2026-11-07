@@ -10,8 +10,24 @@ const { installNativeClick } = require('./native-click');
 // 渲染层先用它判意图，主进程再用它兜底校验（页面被改也绕不过去）。
 const { isAllowedExternalUrl } = require('./renderer/intents.js');
 
-const ROOT = path.resolve(__dirname, '../../..');
-const PYTHON = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
+// 打包态与开发态的「根」不是同一处：
+//   开发态 = 仓库根（__dirname 往上三层）
+//   打包态 = extraResources 里解包出来的 approot —— Python 读不了 asar 内文件，
+//            backend / renderer / assets / config / infrastructure 必须是真实目录，
+//            且保持 apps/deskpet/{backend,desktop} 的相对层级（app.py 的静态挂载靠它）。
+const IS_PACKAGED = app.isPackaged;
+const ROOT = IS_PACKAGED
+  ? path.join(process.resourcesPath, 'approot')
+  : path.resolve(__dirname, '../../..');
+// 包内解释器是一份完整 CPython（解释器 + 标准库 + DLL + 运行依赖），
+// 不是 .venv 的拷贝：.venv 的 pyvenv.cfg 指向本机绝对路径、标准库与 DLL 都在 base，
+// 只拷 .venv 换台机器起不来。缺失时只提示重装，绝不回退系统 Python。
+const BUNDLED_PYTHON = path.join(process.resourcesPath, 'runtime', 'python.exe');
+// native_mouse.py 由 Python 进程 spawn，asar 里的路径它读不到，必须用解包后的真实文件。
+const MOUSE_SCRIPT = IS_PACKAGED
+  ? path.join(ROOT, 'apps', 'deskpet', 'desktop', 'native_mouse.py')
+  : path.join(__dirname, 'native_mouse.py');
+let PYTHON = '';
 const WINDOW_SIZE = { width: 430, height: 760 };
 const SMOKE_TEST = process.env.NAIWA_SMOKE_TEST === '1';
 
@@ -74,6 +90,51 @@ function log(message) {
   console.log(line);
 }
 
+// 解释器解析：打包态只认包内那一份，开发态用本机 .venv。
+// DESKPET_PYTHON 只作开发 / 排障覆盖；设了却不存在就直接报错，
+// 不允许「悄悄换一个能用的」——那会把「运行时没打进包」掩盖成一切正常。
+function resolvePython() {
+  const override = String(process.env.DESKPET_PYTHON || '').trim();
+  if (override) {
+    if (!fs.existsSync(override)) {
+      throw new Error(`DESKPET_PYTHON 指向的解释器不存在：${override}`);
+    }
+    return override;
+  }
+  if (IS_PACKAGED) {
+    if (!fs.existsSync(BUNDLED_PYTHON)) {
+      throw new Error('安装包内的 Python 运行时不完整（缺少 resources/runtime/python.exe）');
+    }
+    if (!fs.existsSync(ROOT)) {
+      throw new Error('安装包内的程序文件不完整（缺少 resources/approot）');
+    }
+    return BUNDLED_PYTHON;
+  }
+  const dev = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
+  if (!fs.existsSync(dev)) {
+    throw new Error('未找到项目 .venv，请先安装 Python 依赖');
+  }
+  return dev;
+}
+
+// 启动链失败一律走这里：给一句能操作的话，不白屏、不静默退出、不回退系统 Python。
+function fatalStartupError(error) {
+  const message = String(error && error.message ? error.message : error);
+  log(`[startup-error] ${message}`);
+  if (SMOKE_TEST) {
+    app.exit(1);
+    return;
+  }
+  const body = IS_PACKAGED
+    ? `${message}\n\n本软件自带运行环境，不需要你安装 Python 或联网。\n请重新运行安装程序修复后再次启动。`
+    : `${message}\n\n开发态请按 docs/HANDOFF.md 第 1 节准备 .venv 与依赖。`;
+  // 兜底：15 秒内没人点掉对话框也要退出，别在后台留一个僵尸窗口
+  const timer = setTimeout(() => app.exit(1), 15000);
+  try { dialog.showErrorBox('奶龙桌宠无法启动', body); } catch {}
+  clearTimeout(timer);
+  app.exit(1);
+}
+
 // 用户身份只认 userData/settings.json 里这一份：
 // 页面 origin 是 http://127.0.0.1:{动态端口}，每次重启后端端口都会变，
 // 渲染进程 localStorage 跟着换分区——身份若只存 localStorage，
@@ -83,7 +144,8 @@ const UID_PATTERN = /^[0-9a-f-]{36}$/i;
 function ensureUserIdentity() {
   if (SMOKE_TEST) {
     // 自检必须每次都是「干净的新用户」：固定 uid 会让上一轮留下的待办
-    // 污染 todoCount=0 的断言（业务库在 data/，不随 userData 一起清）。
+    // 污染 todoCount=0 的断言。自检的 userData 是临时目录，业务库随之落到
+    // 临时目录下的 deskpet/（阶段 7 起 DB 跟 DESKPET_DATA_DIR 走），天然是空的。
     currentUserId = crypto.randomUUID();
     return currentUserId;
   }
@@ -180,23 +242,37 @@ async function stopBackend() {
 }
 
 async function startBackend() {
-  if (!fs.existsSync(PYTHON)) throw new Error('未找到项目 .venv，请先安装 Python 依赖');
+  if (!PYTHON || !fs.existsSync(PYTHON)) throw new Error('未找到可用的 Python 解释器');
   const generation = ++backendGeneration;
   apiPort = await getFreePort();
   const apiKey = decryptApiKey();
+  // 业务数据（含 data/deskpet.db）统一落 userData：装到 C:\Program Files 这类
+  // 只读目录也要能新建待办、重启后还在。cwd 同理——只读目录不能当工作目录，
+  // 任何相对路径写入都会当场炸，所以 cwd 指到可写的数据目录，源码靠 PYTHONPATH 找。
+  const dataDir = path.join(app.getPath('userData'), 'deskpet');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const inherited = { ...process.env };
+  // 继承来的 PYTHONHOME / PYTHONSTARTUP 会把包内解释器带偏（指到别人的 Python），
+  // PYTHONPATH 由我们自己设，其余一律不带。
+  delete inherited.PYTHONHOME;
+  delete inherited.PYTHONSTARTUP;
+  delete inherited.PYTHONEXECUTABLE;
   const child = spawn(PYTHON, [
     '-m', 'uvicorn', 'apps.deskpet.backend.app:app',
     '--host', '127.0.0.1', '--port', String(apiPort), '--log-level', 'warning'
   ], {
-    cwd: ROOT,
+    cwd: dataDir,
     env: {
-      ...process.env,
+      ...inherited,
       DEEPSEEK_API_KEY: apiKey,
       DESKPET_ACCESS_TOKEN: '',
-      DESKPET_DATA_DIR: path.join(app.getPath('userData'), 'deskpet'),
+      DESKPET_DATA_DIR: dataDir,
       PYTHONPATH: ROOT,
       PYTHONUNBUFFERED: '1',
-      PYTHONIOENCODING: 'utf-8'
+      PYTHONIOENCODING: 'utf-8',
+      // 包内运行时装在只读目录里，__pycache__ 写不进去：字节码缓存统一挪到 userData。
+      // 开发态保留 .venv 里已有的 pyc，不让自检每次重编译。
+      ...(IS_PACKAGED ? { PYTHONPYCACHEPREFIX: path.join(dataDir, 'pycache') } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
@@ -323,7 +399,9 @@ function createWindow() {
     }
   });
   if (process.platform === 'win32') {
-    disposeNativeClick = installNativeClick(mainWindow, screen, () => mainWindow.webContents.send('pet:command', 'open'), PYTHON);
+    // 第 5 个参数 = native_mouse.py 的真实路径：打包态在 asar 外（Python 读不到 asar），
+    // 且监听进程必须用同一个包内解释器，挂掉会丢拖拽 / 抬起动作。
+    disposeNativeClick = installNativeClick(mainWindow, screen, () => mainWindow.webContents.send('pet:command', 'open'), PYTHON, MOUSE_SCRIPT);
   }
   mainWindow.setAlwaysOnTop(saved.alwaysOnTop !== false, 'floating');
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -627,6 +705,8 @@ async function runSmokeTest() {
 }
 
 app.whenReady().then(async () => {
+  PYTHON = resolvePython();
+  log(`[startup] runtime=${JSON.stringify({ packaged: IS_PACKAGED, root: ROOT, python: PYTHON })}`);
   ensureUserIdentity();
   await startBackend();
   createTray();
@@ -717,8 +797,7 @@ app.whenReady().then(async () => {
   setTimeout(checkDueNotifications, 3000);
   if (SMOKE_TEST) setTimeout(runSmokeTest, 1800);
 }).catch((error) => {
-  log(`[startup-error] ${error.message}`);
-  app.exit(1);
+  fatalStartupError(error);
 });
 
 app.on('activate', showMainWindow);
