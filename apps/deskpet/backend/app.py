@@ -16,7 +16,6 @@ from fastapi.staticfiles import StaticFiles
 
 from apps.deskpet.backend.api import cleanup_expired_exports, download_router, router
 from apps.deskpet.backend.auth import auth_middleware
-from apps.deskpet.backend.games.builtin.mini_snake import register as _reg_snake
 
 
 def create_app() -> FastAPI:
@@ -25,9 +24,6 @@ def create_app() -> FastAPI:
     app.include_router(router)
     # P0-1：导出文件下载路由（/exports/{filename}，白名单校验在 api.py）
     app.include_router(download_router)
-
-    # 注册游戏插件
-    _reg_snake()
 
     # Step 0-2：启动时清理过期导出物（expires_at 真生效，不假装过期）
     cleanup_expired_exports()

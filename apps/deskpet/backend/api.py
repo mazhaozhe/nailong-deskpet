@@ -2,8 +2,14 @@
 
 阶段 3：接模型层（方案 B，收敛的 ReAct）。已实现：待办 CRUD、补报、
         导出 docx、成长、模拟，以及 notice/parse、todo/from-voice、
-        task/qa、game/strategy、game/review（模型可用走 LlmGateway，
+        task/qa（模型可用走 LlmGateway，
         不可用一律降级规则版/静态兜底，degraded=true + 明确原因）。
+会话 3：新增 POST /chat 自由闲聊（覆盖交接卡 §2.7「不做通用问答」，依据
+        11/7 10:49 用户明确要求）。仍是单次 gateway.invoke() + 固定 schema
+        + 工具表 0 + 不联网；短期记忆在 chat_memory 的进程内会话表，
+        长期记忆只读本机 growth/todos（按 X-User-Id 隔离）。
+会话 5：内置小游戏（前端 + 后端）整体下架，改为「桌宠拟人表现层」；
+        游戏记忆表与闲聊里的游戏事实一并移除（代码层清理，数据层不动）。
 
 安全硬约束（brief 第七节 · v6.1 单机 exe 口径）：
     - 前端只调本文件路由，永不直连模型 API
@@ -29,41 +35,31 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from apps.deskpet.backend import capabilities, clock, cost, settings, storage
+from apps.deskpet.backend import agent_runtime, chat_memory, chat_rules
 from apps.deskpet.backend.deps import get_conn
 from apps.deskpet.backend.growth import build_catchup
 from apps.deskpet.backend.llm import gateway
 from apps.deskpet.backend.models import (
-    GameCommentary,
-    GameReview,
-    GameStrategy,
+    ChatReply,
     NoticeParseResult,
     TaskQAAnswer,
     TodoStatus,
     VoiceParseResult,
 )
 from apps.deskpet.backend.prompts import (
-    game_commentary as prompt_game_commentary,
-    game_review as prompt_game_review,
-    game_strategy as prompt_game_strategy,
+    free_chat as prompt_free_chat,
     notice_to_checklist,
     task_qa as prompt_task_qa,
     voice_to_todo,
 )
 from apps.deskpet.backend.schemas import (
     CatchupResponse,
+    ChatRequest,
+    ChatResponse,
     ChecklistConfirmRequest,
     ChecklistConfirmResponse,
     ExportDocxRequest,
     ExportDocxResponse,
-    GameCommentaryRequest,
-    GameCommentaryResponse,
-    GameMemoryResponse,
-    GameReviewRequest,
-    GameReviewResponse,
-    GameStartRequest,
-    GameStartResponse,
-    GameStrategyRequest,
-    GameStrategyResponse,
     GrowthResponse,
     ModelSwitchRequest,
     NoticeParseRequest,
@@ -304,6 +300,86 @@ async def task_qa(req: TaskQARequest, request: Request,
 
 
 # ===========================================================================
+# 自由闲聊（会话 3：单次结构化调用 + 记忆型智慧层）
+# ===========================================================================
+@router.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest, request: Request,
+               conn=Depends(get_conn)) -> ChatResponse:
+    """和桌宠自由闲聊。仍是方案 B 的收敛形态，不是完整 Agent。
+
+    链路（唯一一条）：POST /chat → gateway.invoke(schema=ChatReply,
+    route="chat", capability="free_chat") → _structured_call(tool_choice="auto").
+    绝不在这里自己写 with_structured_output：会话 2 那个「思考模式 400」的
+    修复只挂在 gateway 这一条链上，绕过去就会重演
+    「Thinking mode does not support this tool_choice」。
+
+    三种短路（都不烧模型）：
+      1. 空消息 → chat_rules.empty_reply()，200 + source=rule（不 500、不空白）；
+      2. 纯打招呼/道谢 → chat_rules.simple_reply()，顺手带一句真实待办；
+      3. 模型不可用 → chat_rules.fallback_reply()，degraded=true + 原因。
+
+    记忆：
+      - 短期：chat_memory.chat_sessions（进程内，按 uid+session 隔离，≤6 轮）；
+      - 长期：chat_memory.collect_facts() 只读 growth/todos，
+        **不写库、不虚构、0 条就如实说 0 条**。
+
+    降级口径：`degraded` 取 out.degraded 而不是写死 False —— ollama-local
+    兜底也会返回 data，但它仍然是降级，必须如实标注（同 task/qa 兜底口径）。
+    """
+    uid_ = _uid(request)
+    session_id = (req.session_id or "").strip()
+    text = (req.message or "").strip()
+
+    # 长期记忆（只读，按 uid 隔离；每次现读，不缓存跨用户数据）
+    facts = chat_memory.collect_facts(conn, uid_)
+
+    # 短期记忆：该 session 首次出现时用前端回传的 history 播种，之后以本表为准
+    history = chat_memory.chat_sessions.seed_if_new(
+        uid_, session_id,
+        [{"role": turn.role, "content": turn.content} for turn in req.history])
+
+    if chat_rules.is_empty(text):
+        return ChatResponse(
+            data=chat_rules.empty_reply(), degraded=False,
+            source="rule", source_detail="空消息：规则提示，未调用模型")
+
+    if chat_rules.is_simple(text):
+        reply = chat_rules.simple_reply(text, facts)
+        chat_memory.chat_sessions.append(uid_, session_id, "user", text)
+        chat_memory.chat_sessions.append(uid_, session_id, "assistant",
+                                         reply.reply)
+        return ChatResponse(
+            data=reply, degraded=False,
+            source="rule", source_detail="纯打招呼/道谢：规则回复，零模型调用")
+
+    out = await gateway.invoke(
+        schema=ChatReply,
+        messages=prompt_free_chat.build_messages(
+            text,
+            memory_block=chat_memory.render_memory_block(facts),
+            history=history),
+        route="chat", capability="free_chat")
+
+    if out.data is not None:
+        chat_memory.chat_sessions.append(uid_, session_id, "user", text)
+        chat_memory.chat_sessions.append(uid_, session_id, "assistant",
+                                         out.data.reply)
+        return ChatResponse(
+            data=out.data, degraded=out.degraded,
+            degrade_reason=out.degrade_reason, source="model",
+            source_detail=("已降级本地 ollama-local，不是云端模型"
+                           if out.degraded else ""))
+
+    reply = chat_rules.fallback_reply(out.degrade_reason, facts)
+    chat_memory.chat_sessions.append(uid_, session_id, "user", text)
+    chat_memory.chat_sessions.append(uid_, session_id, "assistant",
+                                     reply.reply)
+    return ChatResponse(
+        data=reply, degraded=True, degrade_reason=out.degrade_reason,
+        source="rule", source_detail="模型不可用：规则兜底，页面不空白")
+
+
+# ===========================================================================
 # 导出 docx（不用模型 · P0-5 方案 A：deskpet 内纯函数，apps.agent.tools.coding 不进进程）
 # ===========================================================================
 # P0-1 / Step 0-2：导出目录统一落用户数据目录（apps/deskpet/backend/paths.py），
@@ -434,152 +510,8 @@ async def download_export(filename: str):
 
 
 # ===========================================================================
-# 游戏大脑
-# ===========================================================================
-@router.post("/game/start", response_model=GameStartResponse)
-async def game_start(req: GameStartRequest, request: Request,
-                     conn=Depends(get_conn)) -> GameStartResponse:
-    """开局。阶段 4：brain_level=2 经 gateway 取初始策略（策略层开局，
-    带历史复盘记忆体现「会进步」）；brain_level=1 仅规则。
-
-    关态 / 无 Key / 超限 / 校验不过 → initial_strategy=None + degraded=true，
-    照常开局绝不报错；不改 GameStartResponse 已有字段（阶段 1 契约）。
-    brain_level 已在 GameStartRequest 契约层收紧为 1~2，传 3 直接 422。
-    """
-    from apps.deskpet.backend.games.registry import get_game
-    reg = get_game(req.game_id)
-    if not reg or not reg.enabled:
-        raise HTTPException(404, f"游戏 {req.game_id} 不存在或已禁用")
-    sess = str(uuid.uuid4())
-    if req.brain_level < 2:
-        return GameStartResponse(
-            session_id=sess, game_id=req.game_id,
-            brain_level=req.brain_level, initial_strategy=None)
-    # 策略层开局：拿得到历史 GameMemory 就带一句（不编造，拿不到为空）
-    mem = storage.list_game_memory(conn, _uid(request), req.game_id)
-    memory_snippet = ""
-    if mem:
-        last = mem[-1]
-        memory_snippet = (f"上次{last.result}：{last.lost_at}；"
-                          f"下次改：{last.next_change}")
-    out = await gateway.invoke(
-        schema=GameStrategy,
-        messages=prompt_game_strategy.build_messages(
-            {"game_id": req.game_id, "phase": "opening"}, memory_snippet),
-        route="game/strategy", capability="game_strategy",
-        session_id=sess)
-    if out.data is not None:
-        return GameStartResponse(
-            session_id=sess, game_id=req.game_id,
-            brain_level=req.brain_level, initial_strategy=out.data)
-    return GameStartResponse(
-        session_id=sess, game_id=req.game_id,
-        brain_level=req.brain_level, initial_strategy=None,
-        degraded=True, degrade_reason=out.degrade_reason)
-
-
-@router.post("/game/strategy", response_model=GameStrategyResponse)
-async def game_strategy(req: GameStrategyRequest,
-                        request: Request) -> GameStrategyResponse:
-    """游戏策略层。硬约束（v6.1 §4.10）：
-
-    - 模型只出策略 JSON（策略名白名单 + 参数 + 理由），不出单步按键，
-      不进实时执行层；白名单动作表决定可行性；
-    - 非法 JSON / 校验不过 → 回落默认规则策略（balanced），degraded=true；
-    - 单局调用 ≤3（策略+复盘共用计数），超限回默认规则；
-    - 模型不可用同样回默认规则，绝不 500。
-    """
-    out = await gateway.invoke(
-        schema=GameStrategy,
-        messages=prompt_game_strategy.build_messages(req.state_snapshot),
-        route="game/strategy", capability="game_strategy",
-        session_id=req.session_id)
-    calls = gateway.session_calls(req.session_id)
-    if out.data is not None:
-        return GameStrategyResponse(
-            data=out.data, degraded=out.degraded,
-            degrade_reason=out.degrade_reason,
-            model_calls_this_game=calls)
-    return GameStrategyResponse(
-        data=GameStrategy(
-            strategy_name="balanced", params={},
-            reason="默认规则策略（模型不可用/超限/校验不过的兜底）"),
-        degraded=True, degrade_reason=out.degrade_reason,
-        model_calls_this_game=calls)
-
-
-@router.post("/game/review", response_model=GameReviewResponse)
-async def game_review(req: GameReviewRequest, request: Request,
-                      conn=Depends(get_conn)) -> GameReviewResponse:
-    """每局结束一次的复盘。模型可用输出输在哪/下次怎么改/一句话结论；
-    不可用回落静态兜底文案（页面不空白、有提示）。
-    final_state 里带 game_id 时把复盘结论写入 GameMemory（下一局策略层
-    可读它体现「会进步」）；拿不到就不写，绝不为了写库而编造。
-    """
-    out = await gateway.invoke(
-        schema=GameReview,
-        messages=prompt_game_review.build_messages(
-            req.final_state, req.strategy_history),
-        route="game/review", capability="game_review",
-        session_id=req.session_id)
-    if out.data is not None:
-        review, degraded, reason = out.data, False, ""
-    else:
-        result = str(req.final_state.get("result", ""))
-        review = GameReview(
-            lost_at=f"本局已结束（{result}）",
-            next_change="",
-            takeaway=f"复盘模型暂不可用：{out.degrade_reason}")
-        degraded, reason = True, out.degrade_reason
-    game_id = req.final_state.get("game_id")
-    if isinstance(game_id, str) and game_id:
-        from apps.deskpet.backend.models import GameMemory
-        storage.record_game_memory(conn, GameMemory(
-            user_id=_uid(request), game_id=game_id,
-            played_at=clock.real_now(),
-            strategy_used=";".join(req.strategy_history[-3:]) or "default",
-            result=str(req.final_state.get("result", "unknown")),
-            lost_at=review.lost_at,
-            next_change=review.next_change))
-    return GameReviewResponse(
-        data=review, degraded=degraded, degrade_reason=reason)
-
-
-@router.post("/game/commentary", response_model=GameCommentaryResponse)
-async def game_commentary(req: GameCommentaryRequest,
-                          request: Request) -> GameCommentaryResponse:
-    """游戏解说层（阶段 4）。硬约束：
-
-    - 模型只写一句气泡台词 + 情绪标签，不碰操作、不出按键、
-      不进实时执行层（执行层永远纯规则，禁止逐帧调模型）；
-    - 与策略/复盘共用同一 session_id 计数，单局总调用 ≤3；
-    - 关态 / 无 Key / 超限 / 校验失败 → 静态兜底台词 + degraded=true，
-      绝不 500、不空白。
-    """
-    out = await gateway.invoke(
-        schema=GameCommentary,
-        messages=prompt_game_commentary.build_messages(
-            req.state_snapshot, req.strategy_name),
-        route="game/commentary", capability="game_commentary",
-        session_id=req.session_id)
-    if out.data is not None:
-        return GameCommentaryResponse(data=out.data, degraded=False)
-    return GameCommentaryResponse(
-        data=GameCommentary(
-            line="稳住节奏，一步一步来，我看着你呢～", mood="encourage"),
-        degraded=True, degrade_reason=out.degrade_reason)
-
-
-@router.get("/game/{game_id}/memory", response_model=GameMemoryResponse)
-async def game_memory(game_id: str, request: Request,
-                      conn=Depends(get_conn)) -> GameMemoryResponse:
-    return GameMemoryResponse(
-        data=storage.list_game_memory(conn, _uid(request), game_id))
-
-
-# ===========================================================================
-# 三态开关 + 能力注册表 + 成本配额 + Key 管理（阶段 3 本地接口；
-# 阶段 5 设置界面经 IPC/本地接口调用，本阶段不做 UI）
+# 三态开关 + 能力注册表 + 成本配额 + Key 管理
+# （桌宠设置页 / 主进程 IPC 都直接调这些本地接口）
 # ===========================================================================
 @router.get("/settings/model-switch")
 async def get_model_switch() -> dict:
@@ -622,10 +554,11 @@ async def key_status() -> dict:
 
 @router.delete("/key")
 async def delete_key() -> dict:
-    """删 Key：清进程内注入 + 重置懒加载态，立刻回规则版。
+    """删 Key：清掉本进程内注入的环境变量 + 重置懒加载态，立刻回规则版。
 
-    safeStorage 加密份在 Electron 主进程 userData 里，阶段 5 由主进程
-    同步删除（本阶段只提供本地接口约定）。
+    userData 里的 safeStorage 加密份由 Electron 主进程同步删除，并在删完后
+    重启 Python 子进程（旧 Key 只存在于子进程环境变量里，换进程才算彻底
+    不残留）。所以本接口只是三步里的第一步，不是全部。
     """
     return gateway.delete_key()
 
@@ -645,3 +578,50 @@ async def debug_model_calls() -> dict:
     from apps.deskpet.backend import model_counter
     return {"total": model_counter.total(),
             "by_route": model_counter.by_route()}
+
+
+# ===========================================================================
+# 完整 Agent 第四态（会话 4 · C 全模式 + C 轻量审批）
+# ===========================================================================
+# 11/7 14:05 用户拍板 C 全模式：完整 Agent、全工具、联网；14:15 拍板 C 轻量审批：
+# 仅 run_shell / write_file / edit_file 弹确认，其余自动执行；默认拒绝、超时拒绝。
+# 本组路由全部委托 apps/deskpet/backend/agent_runtime.py（懒加载）：
+# 只要不打这些路由，Agent / langchain 模块一个都不会进进程；
+# off/auto/on 三态与 /chat 主线行为一字未动。
+@router.post("/agent/mode")
+async def agent_mode(req: agent_runtime.AgentModeRequest) -> dict:
+    """打开/关闭第四态（叠加开关，不替换三态）。"""
+    enabled = agent_runtime.AgentRuntime.set_mode(req.enabled)
+    return {"agent_mode": enabled,
+            "note": "已打开：聊天框内发出的消息将走完整 Agent（全工具、需审批、可联网）"
+                    if enabled else "已关闭：回到三态主线，Agent 模块立即卸载"}
+
+
+@router.post("/agent/chat")
+async def agent_chat(req: agent_runtime.AgentChatRequest,
+                     request: Request) -> dict:
+    """发一句给完整 Agent。status: ok | pending_approval | degraded。"""
+    return await agent_runtime.get_runtime().chat(
+        _uid(request), req.session_id, req.message)
+
+
+@router.post("/agent/approve")
+async def agent_approve(req: agent_runtime.AgentApproveRequest,
+                        request: Request) -> dict:
+    """审批决定。decisions 与 action_requests 按下标一一对应；approval_id 一次性。"""
+    decisions = [d.type for d in req.decisions]
+    return await agent_runtime.get_runtime().approve(
+        _uid(request), req.approval_id, decisions)
+
+
+@router.get("/agent/status")
+async def agent_status() -> dict:
+    """调试视图：模式 / 工具清单 / 调用数与成本 / 待审批数。不回 Key 明文。"""
+    return agent_runtime.get_runtime().status()
+
+
+@router.post("/agent/session/reset")
+async def agent_reset(req: agent_runtime.AgentResetRequest,
+                      request: Request) -> dict:
+    """清该 uid+session 的 Agent 会话（未决审批按默认拒绝清账）。"""
+    return await agent_runtime.get_runtime().reset_session(req.session_id, _uid(request))

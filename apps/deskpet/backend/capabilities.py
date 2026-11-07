@@ -38,25 +38,24 @@ REGISTRY: dict[str, Capability] = {
         name="task_qa", requires_network=True, requires_key=True,
         degraded_fallback="static_answer", enabled=True,
         description="任务内一问一答（只聊当前任务）"),
+    "free_chat": Capability(
+        name="free_chat", requires_network=True, requires_key=True,
+        degraded_fallback="static_chat", enabled=True,
+        description="自由闲聊（单次结构化调用、固定 schema；记忆只读本机"
+                    "真实数据，工具表 0、不联网检索；不设 per_session_cap——"
+                    "闲聊是主交互，按每日成本上限收敛即可）"),
     "from_voice": Capability(
         name="from_voice", requires_network=True, requires_key=True,
         degraded_fallback="voice_rules", enabled=True,
         description="一句话变待办（无 Key 时规则兜底，不留 500）"),
-    "game_strategy": Capability(
-        name="game_strategy", requires_network=True, requires_key=True,
-        degraded_fallback="default_strategy", enabled=True,
-        description="游戏策略层（固定 JSON，不进实时执行层）",
-        per_session_cap=3),
-    "game_review": Capability(
-        name="game_review", requires_network=True, requires_key=True,
-        degraded_fallback="static_review", enabled=True,
-        description="游戏复盘层（每局结束一次）",
-        per_session_cap=3),
-    "game_commentary": Capability(
-        name="game_commentary", requires_network=True, requires_key=True,
-        degraded_fallback="static_commentary", enabled=True,
-        description="游戏解说层（一句话气泡台词，不碰操作不进执行层）",
-        per_session_cap=3),
+    # 会话 4 · C 全模式第四态（11/7 14:05/14:15 用户拍板）：叠加开关，
+    # 不替换 off/auto/on 三态；free_chat 的描述是方案 B 主线的真实描述，一字不改。
+    "agent_chat": Capability(
+        name="agent_chat", requires_network=True, requires_key=True,
+        degraded_fallback="static_chat", enabled=True,
+        description="完整 Agent 第四态（全工具、需审批、可联网；"
+                    "仅 run_shell/write_file/edit_file 弹审批，其余自动执行；"
+                    "默认拒绝、60s 超时拒绝；与 gateway 共用成本账本）"),
 }
 
 

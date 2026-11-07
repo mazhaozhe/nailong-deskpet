@@ -11,11 +11,11 @@ brief 第八节可替换准则：prompt 是独立文件，与形象/交互/能�
 - notice_to_checklist.py  贴通知 → 抽要求清单（deepseek-flash，固定 JSON schema）
 - voice_to_todo.py        一句话变待办（deepseek-flash 口语解析）
 - task_qa.py              任务内一问一答（只聊当前任务，不做百科/检索）
-- game_strategy.py        游戏策略层（读状态快照，输出固定 JSON：策略名+参数）
-- game_review.py          游戏复盘层（输出输在哪/下次怎么改）
 
-暂不实现：
-- free_chat.py            自由闲聊（阶段 5 再定，本期无此路由）
+已实现（会话 3）：
+- free_chat.py            自由闲聊（人设锚点 + 记忆块 + 固定 JSON schema）。
+  契约：单次 gateway.invoke()、工具表 0、不联网、不注册工具；
+  完整 Agent（全工具 + 联网 + 审批）属会话 4，不在本文件放行。
 
 每个 prompt 文件导出 build_messages() 函数，接收场景参数返回
 [{"role": "system"/"user", "content": ...}]，供 LlmGateway.ainvoke 使用。

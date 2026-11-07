@@ -7,12 +7,10 @@
     待办状态（什么事·截止时间·还差什么）
     回来补报快照
     认识天数 / 记忆累积 / 亲密度心情
-    游戏记忆（输在哪 / 下次怎么改 / 用了哪套策略）
 
 以及「要模型」部位返回的固定 JSON schema（校验重试用）：
     通知抽清单结果
     一句话变待办结果
-    游戏策略 / 复盘
 """
 
 from __future__ import annotations
@@ -123,7 +121,7 @@ class GrowthState(BaseModel):
     first_seen: datetime = Field(..., description="首次使用日期（持久化）")
     days_known: int = Field(..., description="认识你的第 N 天（今天 − first_seen）")
     memory_count: int = Field(
-        ..., description="记忆条数（累积的 ddl/项目/卡点/游戏复盘总数）")
+        ..., description="记忆条数（累积的 ddl/项目/卡点数）")
     intimacy: int = Field(
         0, ge=0, description="亲密度（按时完成 +1，漏了不扣）")
     mood: int = Field(
@@ -133,25 +131,6 @@ class GrowthState(BaseModel):
     # 模拟展示用：临时覆盖「当前日期」以演示跨天成长，不写脏真实数据
     simulated_now: Optional[datetime] = Field(
         None, description="模拟第 N 天时临时覆盖的当前日期；None=用真实今天")
-
-
-# ===========================================================================
-# 游戏记忆（不用模型累积 · 模型只在复盘层写入 · 不做全量回放/用户画像）
-# ===========================================================================
-class GameMemory(BaseModel):
-    """游戏复盘结论。brief 第五节：只存三类字段，不做全量回放、不做用户画像。
-
-    - lost_at：输在哪
-    - next_change：下次怎么改
-    - strategy_used：用了哪套策略（策略名 + 参数）
-    """
-    game_id: str
-    user_id: str
-    played_at: datetime
-    result: str = Field(..., description="win / lose / draw")
-    lost_at: str = Field("", description="输在哪（复盘层输出）")
-    next_change: str = Field("", description="下次怎么改（复盘层输出）")
-    strategy_used: str = Field("", description="用了哪套策略（策略名+参数 JSON 摘要）")
 
 
 # ===========================================================================
@@ -181,40 +160,6 @@ class VoiceParseResult(BaseModel):
         1.0, ge=0, le=1, description="置信度；低于阈值时前端提示用户确认")
 
 
-class GameStrategy(BaseModel):
-    """游戏策略层输出 schema（开局/每 N 秒一次，不碰实时执行）。
-
-    模型只出策略 JSON，不出单步按键；白名单动作表决定可行性；
-    校验不过回落默认规则。单局模型调用 ≤3 次。
-    """
-    strategy_name: str = Field(..., description="策略名（如 aggressive/defensive）")
-    params: dict = Field(
-        default_factory=dict, description="策略参数（如 {aggression: 0.7}）")
-    reason: str = Field("", description="为什么选这套（解说用，不进执行）")
-
-
-class GameReview(BaseModel):
-    """游戏复盘层输出 schema（每局结束一次）。
-
-    输出写入 GameMemory，下一局策略层可读历史 GameMemory 做「会进步」。
-    """
-    lost_at: str = Field("", description="输在哪")
-    next_change: str = Field("", description="下次怎么改")
-    takeaway: str = Field("", description="一句话复盘结论（解说层用）")
-
-
-class GameCommentary(BaseModel):
-    """游戏解说层输出 schema（阶段 4 纯追加）：一句气泡台词 + 情绪标签。
-
-    解说层只写台词：不碰操作、不出按键、不进实时执行层；
-    失败回落静态兜底台词（degraded=true），单局模型调用 ≤3 共用计数。
-    """
-    line: str = Field(..., description="一句气泡台词（不碰操作、不出按键）")
-    mood: str = Field(
-        "calm",
-        description="情绪标签：cheer/calm/worried/proud/encourage")
-
-
 class TaskQAAnswer(BaseModel):
     """任务内一问一答的固定输出 schema（只聊当前任务，不做百科/检索）。
 
@@ -225,3 +170,25 @@ class TaskQAAnswer(BaseModel):
     answer: str = Field(..., description="针对提问的回答（≤200 字，只围绕当前任务）")
     suggestions: list[str] = Field(
         default_factory=list, description="下一步行动建议（0~3 条）")
+
+
+class ChatReply(BaseModel):
+    """自由闲聊的固定输出 schema（对话气泡里的「智慧层」回执）。
+
+    仍然是「场景编排的固定回执」而非裸自由文本：模型只能往这四个字段里填，
+    校验不过就降级成规则回复（degraded=true 如实标注）。
+
+    `thought` 只做内部语气控制（比如决定句子长短、要不要追问），
+    **绝不向用户展示**——前端渲染时只读 reply / mood。
+
+    契约：本 schema 只在 apps.deskpet.backend.api 的 /chat 路由里
+    经 gateway.invoke() 使用（单次调用、工具表 0、不联网、不注册工具）。
+    """
+    reply: str = Field(..., description="给用户看的一句话回复（≤120 字，口语化）")
+    mood: str = Field(
+        "calm",
+        description="情绪标签：cheer/calm/concerned/playful/proud/encourage")
+    thought: str = Field(
+        "", description="内部语气控制用（不展示给用户，前端禁止渲染）")
+    memory_hint: str = Field(
+        "", description="这条回复引用到的记忆点（可空；仅用于调试核对，不展示）")

@@ -3,8 +3,8 @@
 判据演进：
   - 骨架期：所有路由体是 NotImplementedError，期望 500（可达即通过）
   - 实现期：已实现路由期望 2xx，未实现（接模型）路由仍期望 500
-  - 阶段 3 接模型后：from-voice/task/qa/game/strategy/game/review
-    已实现（模型层 + 降级链），正常体期望 2xx，逐路由期望表自动区分
+  - 阶段 3 接模型后：from-voice/task/qa 已实现（模型层 + 降级链），
+    正常体期望 2xx，逐路由期望表自动区分
 
 冒烟不接真实 API：显式清空注入 Key 的环境变量，让模型层
 走「自动 + 无 Key → 降级规则版」档（附录 B：不接真实 API、不发真实请求）。
@@ -34,8 +34,6 @@ def _build_app() -> FastAPI:
     app.middleware("http")(auth_middleware)
     app.include_router(router)
     app.include_router(download_router)
-    from apps.deskpet.backend.games.builtin.mini_snake import register as _reg_snake
-    _reg_snake()
     return app
 
 
@@ -214,33 +212,7 @@ def main() -> int:
                                f"export got {r2.status_code}"))
 
     # ==========================================================
-    # 8. 游戏大脑
-    # ==========================================================
-    r = client.post("/api/game/start", json={
-        "game_id": "mini-snake", "brain_level": 2})
-    results.append(_check("POST /api/game/start lv=2", r, OK))
-    r = client.post("/api/game/start", json={
-        "game_id": "mini-snake", "brain_level": 3})
-    results.append(_check("POST /api/game/start lv=3 线上禁用", r, VALIDATION))
-    r = client.post("/api/game/start", json={
-        "game_id": "mini-snake", "brain_level": 4})
-    results.append(_check("POST /api/game/start lv=4 校验拦截", r, VALIDATION))
-
-    # strategy/review 阶段 3 已实现（模型 + 默认规则兜底，无 Key 降级 2xx）
-    r = client.post("/api/game/strategy", json={
-        "session_id": "sess-1",
-        "state_snapshot": {"score": 100, "enemies": 5, "hp": 3}})
-    results.append(_check("POST /api/game/strategy 正常体（无Key降级）", r, OK))
-    r = client.post("/api/game/review", json={
-        "session_id": "sess-1", "final_state": {"result": "lose"},
-        "strategy_history": ["aggressive"]})
-    results.append(_check("POST /api/game/review 正常体（无Key降级）", r, OK))
-    # game memory 列表：纯查询 SQLite，不接模型
-    r = client.get("/api/game/mini-snake/memory")
-    results.append(_check("GET /api/game/{id}/memory", r, OK))
-
-    # ==========================================================
-    # 9. 三态开关 / 能力注册表 / Key 管理（阶段 3 新增本地接口）
+    # 8. 三态开关 / 能力注册表 / Key 管理（阶段 3 新增本地接口）
     # ==========================================================
     r = client.get("/api/settings/model-switch")
     ok_switch_default = _check("GET /api/settings/model-switch", r, OK)

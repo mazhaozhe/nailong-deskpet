@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from apps.deskpet.backend import clock
 from apps.deskpet.backend.models import (
-    GameMemory, GrowthState, PersonaStage, TodoItem, TodoStatus,
+    GrowthState, PersonaStage, TodoItem, TodoStatus,
 )
 
 DB_PATH = Path("data/deskpet.db")
@@ -57,18 +57,6 @@ CREATE TABLE IF NOT EXISTS growth (
     mood          INTEGER NOT NULL DEFAULT 100,
     updated_at    TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS game_memory (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    game_id       TEXT NOT NULL,
-    user_id       TEXT NOT NULL REFERENCES users(user_id),
-    played_at     TEXT NOT NULL,
-    result        TEXT NOT NULL,
-    lost_at       TEXT DEFAULT '',
-    next_change   TEXT DEFAULT '',
-    strategy_used TEXT DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_game_mem_user_game ON game_memory(user_id, game_id, played_at);
 
 CREATE TABLE IF NOT EXISTS access_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,7 +241,7 @@ def get_growth(conn: sqlite3.Connection, user_id: str) -> GrowthState:
 
     days_known / memory_count / stage 不存表，实时算（避免冗余不一致）：
       days_known = now() 与 first_seen 的日期差（模拟时 now() 返回模拟值）
-      memory_count = todos 数 + game_memory 数
+      memory_count = todos 数（会话 5 下架内置小游戏后只剩这一项）
       stage = days_known 映射
     """
     first_seen, _ = get_or_create_user(conn, user_id)
@@ -263,8 +251,6 @@ def get_growth(conn: sqlite3.Connection, user_id: str) -> GrowthState:
 
     todo_count = conn.execute(
         "SELECT COUNT(*) FROM todos WHERE user_id=?", (user_id,)).fetchone()[0]
-    game_count = conn.execute(
-        "SELECT COUNT(*) FROM game_memory WHERE user_id=?", (user_id,)).fetchone()[0]
 
     row = conn.execute(
         "SELECT * FROM growth WHERE user_id=?", (user_id,)).fetchone()
@@ -279,38 +265,11 @@ def get_growth(conn: sqlite3.Connection, user_id: str) -> GrowthState:
         user_id=user_id,
         first_seen=first_seen,
         days_known=days,
-        memory_count=todo_count + game_count,
+        memory_count=todo_count,
         intimacy=intimacy,
         mood=mood,
         stage=stage,
         simulated_now=cur_now if clock.is_simulating(user_id) else None)
-
-
-# ===========================================================================
-# Game memory
-# ===========================================================================
-def record_game_memory(conn: sqlite3.Connection, memory: GameMemory) -> None:
-    get_or_create_user(conn, memory.user_id)
-    conn.execute(
-        "INSERT INTO game_memory(game_id,user_id,played_at,result,lost_at,"
-        "next_change,strategy_used) VALUES(?,?,?,?,?,?,?)",
-        (memory.game_id, memory.user_id, clock.to_iso(memory.played_at),
-         memory.result, memory.lost_at, memory.next_change,
-         memory.strategy_used))
-    conn.commit()
-
-
-def list_game_memory(conn: sqlite3.Connection, user_id: str,
-                     game_id: str) -> list[GameMemory]:
-    rows = conn.execute(
-        "SELECT * FROM game_memory WHERE user_id=? AND game_id=? "
-        "ORDER BY played_at DESC", (user_id, game_id))
-    return [GameMemory(
-        game_id=r["game_id"], user_id=r["user_id"],
-        played_at=clock.parse_iso(r["played_at"]),
-        result=r["result"], lost_at=r["lost_at"] or "",
-        next_change=r["next_change"] or "",
-        strategy_used=r["strategy_used"] or "") for r in rows]
 
 
 # ===========================================================================
