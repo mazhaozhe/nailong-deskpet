@@ -35,8 +35,6 @@ def client(tmp_path, monkeypatch):
 
     from apps.deskpet.backend.api import router, download_router
     from apps.deskpet.backend.auth import auth_middleware
-    from apps.deskpet.backend.games.builtin.mini_snake import register
-    register()
 
     app = FastAPI()
     app.middleware("http")(auth_middleware)

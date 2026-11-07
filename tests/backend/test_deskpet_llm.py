@@ -48,9 +48,11 @@ class FakeModel:
     def __init__(self, behavior):
         self.behavior = behavior
         self.calls = 0
+        self.last_kw = None      # 记录 with_structured_output 的构造参数
 
     def with_structured_output(self, schema, include_raw=False, **kw):
         assert include_raw is True, "gateway 必须用 include_raw 取 usage_metadata"
+        self.last_kw = kw
         return _FakeStructured(self, schema)
 
     async def ainvoke(self, messages):   # key/check 连通性检查走这条
@@ -68,6 +70,10 @@ class FakeModel:
         if b.get("invalid"):
             return {"raw": _FakeAIMessage(b.get("usage")), "parsed": None,
                     "parsing_error": ValueError("非法 JSON/字段缺失")}
+        if b.get("invalid_recoverable") is not None:
+            # 真端点实测形态：tool call 参数串尾部多一个 `}`，LangChain 判 invalid
+            return {"raw": b["invalid_recoverable"], "parsed": None,
+                    "parsing_error": ValueError("Extra data: line 1 column 464")}
         parsed = b.get("parsed_for", {}).get(schema.__name__)
         assert parsed is not None, f"FakeModel 未给 {schema.__name__} 备结果"
         return {"raw": _FakeAIMessage(b.get("usage")),
@@ -119,12 +125,10 @@ def _client():
     from fastapi.testclient import TestClient
     from apps.deskpet.backend.api import router, download_router
     from apps.deskpet.backend.auth import auth_middleware
-    from apps.deskpet.backend.games.builtin.mini_snake import register
     app = FastAPI()
     app.middleware("http")(auth_middleware)
     app.include_router(router)
     app.include_router(download_router)
-    register()
     return TestClient(
         app, raise_server_exceptions=False,
         headers={"X-User-Id": "00000000-0000-4000-8000-0000000000bb"})
@@ -306,22 +310,28 @@ def test_on_state_401_then_ollama_fallback_then_rules(env, monkeypatch):
     assert model_counter.by_route()["notice/parse#ollama-fallback"] == 1
 
 
-def test_validation_retry_then_fallback_to_default_strategy(env, monkeypatch):
-    """非法 JSON：Pydantic 校验重试（≤2 次）→ ollama → 默认规则策略。"""
+def test_validation_retry_then_fallback_to_rule_reply(env, monkeypatch):
+    """非法 JSON：Pydantic 校验重试（≤2 次）→ ollama → 规则兜底（页面不空白）。
+
+    会话 5 前这条打的是已下架的游戏策略接口；现在换成 /api/chat ——
+    走的是同一条 gateway 重试/降级链，
+    断言口径不变：主力重试 2 次 + ollama 兜底 1 次 + 最终规则回复。
+    """
     _inject_key(monkeypatch)
     _patch_model_layer(monkeypatch, _primary_specs({"invalid": True}))
     c = _client()
-    r = c.post("/api/game/strategy", json={
-        "session_id": "sess-invalid", "state_snapshot": {"score": 10}})
+    r = c.post("/api/chat", json={
+        "message": "这一句够长，不会被当成打招呼", "session_id": "sess-invalid"})
     assert r.status_code == 200
     body = r.json()
     assert body["degraded"] is True
-    assert body["data"]["strategy_name"] == "balanced"  # 默认规则兜底
+    assert body["source"] == "rule"                      # 规则兜底，不空白
+    assert body["data"]["reply"].strip()
     assert "校验失败" in body["degrade_reason"]
     # 主力重试 2 次（方案 B ≤2 收敛）+ ollama 1 次
     from apps.deskpet.backend import model_counter
-    assert model_counter.by_route()["game/strategy"] == 2
-    assert model_counter.by_route()["game/strategy#ollama-fallback"] == 1
+    assert model_counter.by_route()["chat"] == 2
+    assert model_counter.by_route()["chat#ollama-fallback"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -366,66 +376,7 @@ def test_per_call_cap_degrades_after_huge_usage(env, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 5. 游戏大脑：单局 ≤3 + 复盘写 GameMemory
-# ---------------------------------------------------------------------------
-def test_game_session_cap_three(env, monkeypatch):
-    """单局（策略+复盘共用计数）模型调用 ≤3，超限回默认规则。"""
-    from apps.deskpet.backend.models import GameStrategy
-
-    def _strategy():
-        return GameStrategy(strategy_name="aggressive",
-                            params={"aggression": 0.7}, reason="抢分优先")
-    _inject_key(monkeypatch)
-    _patch_model_layer(monkeypatch, _primary_specs(
-        {"parsed_for": {"GameStrategy": _strategy()}}))
-    c = _client()
-    sid = "sess-cap"
-    for i in range(3):
-        r = c.post("/api/game/strategy", json={
-            "session_id": sid, "state_snapshot": {"tick": i}})
-        assert r.status_code == 200
-        assert r.json()["degraded"] is False, f"第 {i + 1} 次应走模型"
-        assert r.json()["model_calls_this_game"] == i + 1
-    r = c.post("/api/game/strategy", json={
-        "session_id": sid, "state_snapshot": {"tick": 99}})
-    body = r.json()
-    assert body["degraded"] is True
-    assert "上限" in body["degrade_reason"]
-    assert body["data"]["strategy_name"] == "balanced"   # 默认规则兜底
-    from apps.deskpet.backend import model_counter
-    assert model_counter.by_route()["game/strategy"] == 3
-
-
-def test_game_review_writes_memory_only_with_game_id(env, monkeypatch):
-    """复盘结论写入 GameMemory（final_state 带 game_id 才写，不编造）。"""
-    from apps.deskpet.backend.models import GameReview
-
-    def _review():
-        return GameReview(lost_at="后期贪快", next_change="中期收一次",
-                          takeaway="这局输在后半段")
-    _inject_key(monkeypatch)
-    _patch_model_layer(monkeypatch, _primary_specs(
-        {"parsed_for": {"GameReview": _review()}}))
-    c = _client()
-    r = c.post("/api/game/review", json={
-        "session_id": "sess-r1",
-        "final_state": {"result": "lose", "game_id": "mini-snake"},
-        "strategy_history": ["aggressive"]})
-    assert r.status_code == 200 and r.json()["degraded"] is False
-    r = c.get("/api/game/mini-snake/memory")
-    mem = r.json()["data"]
-    assert mem and mem[-1]["lost_at"] == "后期贪快"
-    # 不带 game_id 的复盘不写库
-    r = c.post("/api/game/review", json={
-        "session_id": "sess-r2", "final_state": {"result": "win"},
-        "strategy_history": []})
-    assert r.status_code == 200
-    r = c.get("/api/game/mini-snake/memory")
-    assert len(r.json()["data"]) == len(mem)
-
-
-# ---------------------------------------------------------------------------
-# 6. Key 管理本地接口：脱敏 / 删除立刻回规则版 / 连通性分类
+# 5. Key 管理本地接口：脱敏 / 删除立刻回规则版 / 连通性分类
 # ---------------------------------------------------------------------------
 def test_key_status_masked_and_delete_takes_effect(env, monkeypatch):
     """status 只回「已配置」+ 尾四位，明文不外泄；DELETE 立刻回规则版。"""
@@ -484,11 +435,11 @@ def test_key_check_not_configured_without_key(env):
 
 
 # ---------------------------------------------------------------------------
-# 7. 能力注册表（口子③）+ 静态懒加载铁闸自检
+# 6. 能力注册表（口子③）+ 静态懒加载铁闸自检
 # ---------------------------------------------------------------------------
 def test_capabilities_registry_declares_four_fields():
     """五项能力每项都声明 requires_network/requires_key/
-    degraded_fallback/enabled 四字段；游戏项带单局上限。"""
+    degraded_fallback/enabled 四字段；主交互不设单会话配额。"""
     from apps.deskpet.backend import capabilities
     assert len(capabilities.all_capabilities()) >= 5
     for cap in capabilities.all_capabilities():
@@ -496,8 +447,8 @@ def test_capabilities_registry_declares_four_fields():
         assert isinstance(cap.requires_key, bool)
         assert isinstance(cap.degraded_fallback, str) and cap.degraded_fallback
         assert isinstance(cap.enabled, bool)
-    assert capabilities.get("game_strategy").per_session_cap == 3
-    assert capabilities.get("game_review").per_session_cap == 3
+    assert capabilities.get("free_chat").per_session_cap is None
+    assert capabilities.get("agent_chat").per_session_cap is None
     assert capabilities.get("nonexistent") is None
 
 
@@ -530,7 +481,7 @@ def test_llm_module_top_level_stays_lazy():
 
 
 # ---------------------------------------------------------------------------
-# 8. from-voice / task-qa：模型档与降级档
+# 7. from-voice / task-qa：模型档与降级档
 # ---------------------------------------------------------------------------
 def test_from_voice_and_task_qa_model_and_fallback(env, monkeypatch):
     """自动+假 Key：from-voice/task-qa 走模型出固定 JSON；
@@ -578,3 +529,235 @@ def test_from_voice_and_task_qa_model_and_fallback(env, monkeypatch):
     assert "还差合照" in r.json()["content"]      # 静态兜底带任务上下文
     from apps.deskpet.backend import model_counter
     assert model_counter.total() == 2   # 关掉之后零新增调用
+
+
+# ---------------------------------------------------------------------------
+# 真 Key 才暴露的两种形态（桩不校验请求/容忍畸形，桩测全绿也发现不了）
+# ---------------------------------------------------------------------------
+def test_structured_call_passes_auto_tool_choice():
+    """必须以 tool_choice="auto" 调用结构化输出。
+
+    DeepSeek 思考模式对「强制绑定某个函数」的 tool_choice 直接回
+    400「Thinking mode does not support this tool_choice」；LangChain 默认
+    正是发强制绑定形态。这条守住修复不被回退（真 Key 实测：改回默认即 400）。
+    """
+    from apps.deskpet.backend.llm import _structured_call
+    from apps.deskpet.backend.models import NoticeParseResult
+
+    class _Recorder:
+        def __init__(self):
+            self.kw = None
+
+        def with_structured_output(self, schema, include_raw=False, **kw):
+            self.kw = kw
+            return self
+
+    m = _Recorder()
+    _structured_call(m, NoticeParseResult, [])
+    assert m.kw.get("tool_choice") == "auto"
+
+
+def test_structured_call_falls_back_when_kw_unsupported():
+    """不认 tool_choice 关键字的模型包装不该因此报错（回退默认写法）。"""
+    from apps.deskpet.backend.llm import _structured_call
+    from apps.deskpet.backend.models import NoticeParseResult
+
+    class _Strict:
+        def with_structured_output(self, schema, include_raw=False):
+            return "ok"
+
+    assert _structured_call(_Strict(), NoticeParseResult, []) == "ok"
+
+
+def test_recover_structure_from_trailing_brace():
+    """参数串尾部多一个 `}`：内容是对的，要救回来而不是重试降级。"""
+    from langchain_core.messages import AIMessage
+    from apps.deskpet.backend.llm import _recover_structure
+    from apps.deskpet.backend.models import NoticeParseResult
+
+    payload = {"items": [{"text": "交周报", "category": "deliverable",
+                          "matched": False}],
+               "deadline_hint": None, "summary": "例会"}
+    msg = AIMessage(content="", invalid_tool_calls=[{
+        "type": "invalid_tool_call", "id": "c1", "name": "NoticeParseResult",
+        "args": json.dumps(payload, ensure_ascii=False) + "}",
+        "error": "Extra data"}])
+    got = _recover_structure({"raw": msg}, NoticeParseResult)
+    assert got is not None and got.summary == "例会"
+
+
+def test_recover_structure_rejects_unrelated_json():
+    """字段名全对不上的 JSON 不许被收成「全默认值空对象」（伪装成功）。"""
+    from langchain_core.messages import AIMessage
+    from apps.deskpet.backend.llm import _recover_structure
+    from apps.deskpet.backend.models import ChatReply
+
+    msg = AIMessage(content='{"items": [], "summary": "x"}')
+    assert _recover_structure({"raw": msg}, ChatReply) is None
+
+
+def test_gateway_recovers_invalid_tool_call_without_retry(env, monkeypatch):
+    """parsed=None 但参数可救 → degraded=False、只调用 1 次（不重试不降级）。"""
+    from langchain_core.messages import AIMessage
+    from apps.deskpet.backend import llm
+
+    _inject_key(monkeypatch)
+    payload = {"items": [{"text": "交周报", "category": "deliverable",
+                          "matched": False}],
+               "deadline_hint": None, "summary": "例会"}
+    msg = AIMessage(content="", invalid_tool_calls=[{
+        "type": "invalid_tool_call", "id": "c1", "name": "NoticeParseResult",
+        "args": json.dumps(payload, ensure_ascii=False) + "}", "error": "Extra data"}])
+    model = FakeModel({"invalid_recoverable": msg,
+                       "usage": {"input_tokens": 10, "output_tokens": 10}})
+    _patch_model_layer(monkeypatch, {
+        llm.PRIMARY_ID: model, llm.MANUAL_ID: model,
+        llm.LOCAL_FALLBACK_ID: FakeModel({})})
+
+    r = _client().post("/api/notice/parse",
+                       json={"notice_text": "例会通知", "use_v4_pro": False})
+    body = r.json()
+    assert r.status_code == 200
+    assert body["degraded"] is False and body["degrade_reason"] == ""
+    assert body["data"]["summary"] == "例会"
+    assert model.calls == 1
+
+
+def test_gateway_sends_auto_tool_choice_end_to_end(env, monkeypatch):
+    """走 HTTP 也带着 tool_choice=auto（防止只在 helper 层对、调用点没接上）。"""
+    from apps.deskpet.backend import llm
+
+    _inject_key(monkeypatch)
+    model = FakeModel({"parsed_for": {"NoticeParseResult": _notice_parsed()}})
+    _patch_model_layer(monkeypatch, {
+        llm.PRIMARY_ID: model, llm.MANUAL_ID: model,
+        llm.LOCAL_FALLBACK_ID: FakeModel({})})
+    _client().post("/api/notice/parse",
+                   json={"notice_text": "例会通知", "use_v4_pro": False})
+    assert (model.last_kw or {}).get("tool_choice") == "auto"
+
+
+def test_classify_error_400_is_request_rejected():
+    """400 单列一类：不是 Key 问题也不是网络问题，别让用户在 Key 上瞎折腾。"""
+    from apps.deskpet.backend.llm import classify_error
+
+    kind, human = classify_error(RuntimeError(
+        "Error code: 400 - Thinking mode does not support this tool_choice"))
+    assert kind == "request_rejected"
+    assert "400" in human
+
+
+# ---------------------------------------------------------------------------
+# 真 Key 才暴露的两种形态（桩不校验请求/容忍畸形，桩测全绿也发现不了）
+# ---------------------------------------------------------------------------
+def test_structured_call_passes_auto_tool_choice():
+    """必须以 tool_choice="auto" 调用结构化输出。
+
+    DeepSeek 思考模式对「强制绑定某个函数」的 tool_choice 直接回
+    400「Thinking mode does not support this tool_choice」；LangChain 默认
+    正是发强制绑定形态。这条守住修复不被回退（真 Key 实测：改回默认即 400）。
+    """
+    from apps.deskpet.backend.llm import _structured_call
+    from apps.deskpet.backend.models import NoticeParseResult
+
+    class _Recorder:
+        def __init__(self):
+            self.kw = None
+
+        def with_structured_output(self, schema, include_raw=False, **kw):
+            self.kw = kw
+            return self
+
+    m = _Recorder()
+    _structured_call(m, NoticeParseResult, [])
+    assert m.kw.get("tool_choice") == "auto"
+
+
+def test_structured_call_falls_back_when_kw_unsupported():
+    """不认 tool_choice 关键字的模型包装不该因此报错（回退默认写法）。"""
+    from apps.deskpet.backend.llm import _structured_call
+    from apps.deskpet.backend.models import NoticeParseResult
+
+    class _Strict:
+        def with_structured_output(self, schema, include_raw=False):
+            return "ok"
+
+    assert _structured_call(_Strict(), NoticeParseResult, []) == "ok"
+
+
+def test_recover_structure_from_trailing_brace():
+    """参数串尾部多一个 `}`：内容是对的，要救回来而不是重试降级。"""
+    from langchain_core.messages import AIMessage
+    from apps.deskpet.backend.llm import _recover_structure
+    from apps.deskpet.backend.models import NoticeParseResult
+
+    payload = {"items": [{"text": "交周报", "category": "deliverable",
+                          "matched": False}],
+               "deadline_hint": None, "summary": "例会"}
+    msg = AIMessage(content="", invalid_tool_calls=[{
+        "type": "invalid_tool_call", "id": "c1", "name": "NoticeParseResult",
+        "args": json.dumps(payload, ensure_ascii=False) + "}",
+        "error": "Extra data"}])
+    got = _recover_structure({"raw": msg}, NoticeParseResult)
+    assert got is not None and got.summary == "例会"
+
+
+def test_recover_structure_rejects_unrelated_json():
+    """字段名全对不上的 JSON 不许被收成「全默认值空对象」（伪装成功）。"""
+    from langchain_core.messages import AIMessage
+    from apps.deskpet.backend.llm import _recover_structure
+    from apps.deskpet.backend.models import ChatReply
+
+    msg = AIMessage(content='{"items": [], "summary": "x"}')
+    assert _recover_structure({"raw": msg}, ChatReply) is None
+
+
+def test_gateway_recovers_invalid_tool_call_without_retry(env, monkeypatch):
+    """parsed=None 但参数可救 → degraded=False、只调用 1 次（不重试不降级）。"""
+    from langchain_core.messages import AIMessage
+    from apps.deskpet.backend import llm
+
+    _inject_key(monkeypatch)
+    payload = {"items": [{"text": "交周报", "category": "deliverable",
+                          "matched": False}],
+               "deadline_hint": None, "summary": "例会"}
+    msg = AIMessage(content="", invalid_tool_calls=[{
+        "type": "invalid_tool_call", "id": "c1", "name": "NoticeParseResult",
+        "args": json.dumps(payload, ensure_ascii=False) + "}", "error": "Extra data"}])
+    model = FakeModel({"invalid_recoverable": msg,
+                       "usage": {"input_tokens": 10, "output_tokens": 10}})
+    _patch_model_layer(monkeypatch, {
+        llm.PRIMARY_ID: model, llm.MANUAL_ID: model,
+        llm.LOCAL_FALLBACK_ID: FakeModel({})})
+
+    r = _client().post("/api/notice/parse",
+                       json={"notice_text": "例会通知", "use_v4_pro": False})
+    body = r.json()
+    assert r.status_code == 200
+    assert body["degraded"] is False and body["degrade_reason"] == ""
+    assert body["data"]["summary"] == "例会"
+    assert model.calls == 1
+
+
+def test_gateway_sends_auto_tool_choice_end_to_end(env, monkeypatch):
+    """走 HTTP 也带着 tool_choice=auto（防止只在 helper 层对、调用点没接上）。"""
+    from apps.deskpet.backend import llm
+
+    _inject_key(monkeypatch)
+    model = FakeModel({"parsed_for": {"NoticeParseResult": _notice_parsed()}})
+    _patch_model_layer(monkeypatch, {
+        llm.PRIMARY_ID: model, llm.MANUAL_ID: model,
+        llm.LOCAL_FALLBACK_ID: FakeModel({})})
+    _client().post("/api/notice/parse",
+                   json={"notice_text": "例会通知", "use_v4_pro": False})
+    assert (model.last_kw or {}).get("tool_choice") == "auto"
+
+
+def test_classify_error_400_is_request_rejected():
+    """400 单列一类：不是 Key 问题也不是网络问题，别让用户在 Key 上瞎折腾。"""
+    from apps.deskpet.backend.llm import classify_error
+
+    kind, human = classify_error(RuntimeError(
+        "Error code: 400 - Thinking mode does not support this tool_choice"))
+    assert kind == "request_rejected"
+    assert "400" in human

@@ -27,7 +27,8 @@ import pytest
 
 # 子进程里跑的主流程脚本：清 KEY + 设开关=关 → 建待办 → 补报 → 贴通知 →
 # 确认落待办 → 勾选 → 导出 docx（关键时点：导出最容易把 apps.agent.tools.coding/
-# langchain 拖进进程）→ 游戏策略/复盘降级路由也打一遍 → 打印 sys.modules。
+# langchain 拖进进程）→ 闲聊降级路由也打一遍 → 打印 sys.modules。
+# 会话 5：内置小游戏的路由与插件已整体下架，这里不再注册任何游戏插件。
 _SUBPROCESS_CODE = r"""
 import sys, json, os, tempfile
 sys.path.insert(0, ".")
@@ -37,7 +38,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from apps.deskpet.backend.api import router, download_router
 from apps.deskpet.backend.auth import auth_middleware
-from apps.deskpet.backend.games.builtin.mini_snake import register
 from apps.deskpet.backend import settings
 
 settings.set_switch(settings.SWITCH_OFF)   # 关态口径：显式设「关」
@@ -46,7 +46,6 @@ app = FastAPI()
 app.middleware("http")(auth_middleware)
 app.include_router(router)
 app.include_router(download_router)
-register()
 
 c = TestClient(app, headers={"X-User-Id":
     "00000000-0000-4000-8000-0000000000aa"})
@@ -172,7 +171,6 @@ def test_main_flow_model_call_blocked(monkeypatch, tmp_path):
     from apps.deskpet.backend.api import router, download_router
     from apps.deskpet.backend.auth import auth_middleware
     from apps.deskpet.backend import model_counter, settings
-    from apps.deskpet.backend.games.builtin.mini_snake import register
 
     # 显式设「关」（附录A-2：清 KEY 与设关两者都做）
     settings.set_switch(settings.SWITCH_OFF)
@@ -182,7 +180,6 @@ def test_main_flow_model_call_blocked(monkeypatch, tmp_path):
     app.middleware("http")(auth_middleware)
     app.include_router(router)
     app.include_router(download_router)
-    register()
 
     headers = {"X-User-Id": "00000000-0000-4000-8000-000000000002"}
     client = TestClient(app, raise_server_exceptions=False, headers=headers)
@@ -212,15 +209,13 @@ def test_main_flow_model_call_blocked(monkeypatch, tmp_path):
     r = client.post("/api/task/qa", json={
         "todo_id": todo_id, "question": "还差什么？"})
     assert r.status_code == 200 and r.json()["degraded"] is True
-    r = client.post("/api/game/strategy", json={
-        "session_id": "sess-blocked",
-        "state_snapshot": {"score": 10, "hp": 3}})
+    # 会话 5：内置小游戏下架，原先打的两条游戏路由换成 /chat 关态兜底，
+    # 断言口径不变——关态 200 + degraded=true + 页面不空白 + 零模型调用。
+    r = client.post("/api/chat", json={
+        "message": "关态下也该有一句能看的回复", "session_id": "sess-blocked"})
     assert r.status_code == 200 and r.json()["degraded"] is True
-    assert r.json()["data"]["strategy_name"] == "balanced"  # 默认规则兜底
-    r = client.post("/api/game/review", json={
-        "session_id": "sess-blocked", "final_state": {"result": "lose"},
-        "strategy_history": ["balanced"]})
-    assert r.status_code == 200 and r.json()["degraded"] is True
+    assert r.json()["source"] == "rule"
+    assert r.json()["data"]["reply"].strip()
 
     # P0-2 / Step 0-1：deadline 走前端单通道 —— 前端把 parse 抽出的
     # deadline_hint 存住，confirm 时显式回传 deadline_override（index.html
@@ -252,10 +247,9 @@ def test_main_flow_model_call_blocked(monkeypatch, tmp_path):
     r = client.post("/api/growth/simulate/clear")
     assert r.status_code == 200
 
-    # 游戏开局（规则版）
-    r = client.post("/api/game/start", json={
-        "game_id": "mini-snake", "brain_level": 2})
-    assert r.status_code == 200
+    # 会话 5：内置小游戏（路由 + 游戏包 + 前端 tab）已整体下架。
+    # 「任一游戏路由返回 404」由验收清单里的独立探针复核（不放代码里，
+    # 好让全仓残留扫描能保住零命中的口径）。
 
     # 双保险：关态主流程跑完计数也必须为 0
     assert model_counter.total() == 0, (
