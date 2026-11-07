@@ -37,3 +37,7 @@ desktop.ini
 /.trae/
 /docs/阶段*.md
 /docs/上传GitHub_分批commit清单.md
+
+# 会话验收清单与原始输出（含本地跑测日志，仅本机留档，不随公开仓库发布）
+/docs/会话*_验收清单.md
+/docs/会话*_原始输出/
