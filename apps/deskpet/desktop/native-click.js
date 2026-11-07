@@ -6,6 +6,14 @@ const { createInterface } = require('node:readline');
 function installNativeClick(win, screen, open, python) {
   let press = null;
   let generation = 0;
+  // 会话 5：把「往上拖」也变成一条动作命令（结构化对象，渲染层按 type 分发）。
+  // 判据：窗口相对按下点位移 ≥6px 且方向朝上（dy < 0）才算被提起来；
+  // 单击（未移动）仍然只走 open()，不会被误判成拖拽。
+  const LIFT_THRESHOLD = 6;
+  function send(command) {
+    if (win.isDestroyed()) return;
+    win.webContents.send('pet:command', command);
+  }
   const watcher = spawn(python, ['-u', path.join(__dirname, 'native_mouse.py')], {
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe']
@@ -18,9 +26,21 @@ function installNativeClick(win, screen, open, python) {
   function sample(position = win.getPosition()) {
     if (!press) return;
     const cursor = screen.getCursorScreenPoint();
-    if (Math.hypot(cursor.x - press.cursor.x, cursor.y - press.cursor.y) >= 6
-        || Math.hypot(position[0] - press.position[0], position[1] - press.position[1]) >= 6) {
+    const movedByCursor = Math.hypot(cursor.x - press.cursor.x, cursor.y - press.cursor.y) >= LIFT_THRESHOLD;
+    const dx = position[0] - press.position[0];
+    const dy = position[1] - press.position[1];
+    if (movedByCursor || Math.hypot(dx, dy) >= LIFT_THRESHOLD) {
       press.moved = true;
+    }
+    if (!press.moved) return;
+    // 朝上拖：dy 为负。已经在「被提起」状态就持续更新位移，否则只发一次 begin。
+    if (dy <= -LIFT_THRESHOLD) {
+      if (!press.lifted) {
+        press.lifted = true;
+        send({ type: 'lift', phase: 'begin', dy });
+      } else {
+        send({ type: 'lift', phase: 'move', dy });
+      }
     }
   }
 
@@ -28,9 +48,12 @@ function installNativeClick(win, screen, open, python) {
     if (!press || id !== generation) return;
     sample();
     const click = !press.moved;
+    const lifted = press.lifted;
     const hit = press.hit;
     const ticket = generation;
     press = null;
+    // 松手先落地（渲染层播 land 再回 idle），再决定是不是单击开面板
+    if (lifted) send({ type: 'lift', phase: 'end', dy: 0 });
     if (click) hit.then((onPet) => {
       if (!onPet) return;
       setImmediate(() => {
@@ -52,7 +75,8 @@ function installNativeClick(win, screen, open, python) {
       cursor,
       position,
       hit,
-      moved: false
+      moved: false,
+      lifted: false
     };
     if (!watcher.stdin.destroyed) watcher.stdin.write(generation + '\n');
   }
@@ -69,6 +93,9 @@ function installNativeClick(win, screen, open, python) {
   win.hookWindowMessage(0x0216, () => sample());
   win.on('will-move', (_event, bounds) => sample([bounds.x, bounds.y]));
   const cancel = () => {
+    // 被 blur / hide / 取消打断时也要告诉渲染层「这次拖拽结束了」，
+    // 否则桌宠会永远保持「被提起来」的姿态（快速甩出窗口的典型现场）。
+    if (press && press.lifted) send({ type: 'lift', phase: 'end', dy: 0 });
     press = null;
     generation++;
   };

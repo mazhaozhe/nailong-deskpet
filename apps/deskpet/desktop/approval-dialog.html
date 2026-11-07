@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent 操作审批</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 20px 14px;
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #ffffff; color: #1c1f23;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1e2024; color: #e8eaed; }
+    .card { background: #26292e !important; border-color: #3a3f46 !important; }
+    .args { background: #1a1c1f !important; color: #d5d9de !important; }
+    .hint { color: #9aa0a6 !important; }
+    button.secondary { background: #2b2f35 !important; color: #e8eaed !important; border-color: #3a3f46 !important; }
+  }
+  h1 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+  .hint { margin: 0 0 12px; font-size: 12px; color: #5f6368; }
+  .card { border: 1px solid #d0d4d9; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #f8f9fa; }
+  .card h2 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+  .card h2 code { font-family: Consolas, "Cascadia Mono", monospace; color: #b65b52; }
+  .args {
+    margin: 0; padding: 8px; max-height: 150px; overflow: auto;
+    background: #f1f3f4; border-radius: 6px; font: 11px/1.5 Consolas, "Cascadia Mono", monospace;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .decision-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .decision-row label { display: flex; gap: 4px; align-items: center; font-size: 12px; cursor: pointer; }
+  .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+  button {
+    height: 32px; padding: 0 16px; border-radius: 6px; font-size: 13px;
+    border: 1px solid transparent; cursor: pointer;
+  }
+  button.primary { background: #4c8bf5; color: #fff; }
+  button.primary:hover { background: #3d7ae0; }
+  button.secondary { background: #f1f3f4; color: #1c1f23; border-color: #d0d4d9; }
+  .foot { margin-top: 10px; font-size: 11px; color: #80868b; }
+</style>
+</head>
+<body>
+  <h1>Agent 请求执行需要你批准的操作</h1>
+  <p class="hint">只有这三类操作会弹这个窗：执行命令、写文件、改文件。其余操作（读文件、查资料等）自动执行。
+     不选择就点「提交」时，未决定项一律按「拒绝」处理；60 秒不回应也会自动拒绝。</p>
+  <div id="requests"></div>
+  <div class="row">
+    <button class="secondary" id="rejectAll">全部拒绝</button>
+    <button class="primary" id="submit">提交决定</button>
+  </div>
+  <div class="foot">决定只对本次请求有效，参数以窗内展示的原文为准（密钥已掩码）。</div>
+<script>
+  // 渲染层只做展示与选择：textContent 渲染参数原文，禁 innerHTML（防注入）。
+  // payload 由主进程在 did-finish-load 后下发，token 随载荷一起回传。
+  let payload = null;
+
+  window.approvalDialog.onPayload((data) => {
+    payload = data;
+    const container = document.getElementById('requests');
+    container.replaceChildren();
+    (data.actionRequests || []).forEach((req, index) => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const title = document.createElement('h2');
+      const code = document.createElement('code');
+      code.textContent = req.name;
+      title.append(document.createTextNode(String(index + 1) + '. 工具 '), code);
+      const args = document.createElement('pre');
+      args.className = 'args';
+      args.textContent = req.description || JSON.stringify(req.args, null, 2);
+      const row = document.createElement('div');
+      row.className = 'decision-row';
+      const allow = document.createElement('label');
+      const allowInput = document.createElement('input');
+      allowInput.type = 'radio';
+      allowInput.name = `dec-${index}`;
+      allowInput.value = 'approve';
+      allow.append(allowInput, document.createTextNode('允许执行'));
+      const deny = document.createElement('label');
+      const denyInput = document.createElement('input');
+      denyInput.type = 'radio';
+      denyInput.name = `dec-${index}`;
+      denyInput.value = 'reject';
+      denyInput.checked = true;   // 默认拒绝
+      deny.append(denyInput, document.createTextNode('拒绝'));
+      row.append(allow, deny);
+      card.append(title, args, row);
+      container.append(card);
+    });
+  });
+
+  function collect() {
+    return [...document.querySelectorAll('.card')].map((card) => {
+      const checked = card.querySelector('input[type=radio]:checked');
+      return { type: checked ? checked.value : 'reject' };   // 未选 = 拒绝
+    });
+  }
+
+  document.getElementById('submit').addEventListener('click', () => {
+    if (!payload) return;
+    window.approvalDialog.submit(collect());
+  });
+  document.getElementById('rejectAll').addEventListener('click', () => {
+    if (!payload) return;
+    window.approvalDialog.submit(
+      (payload.actionRequests || []).map(() => ({ type: 'reject' })));
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') window.approvalDialog.cancel();
+  });
+</script>
+</body>
+</html>

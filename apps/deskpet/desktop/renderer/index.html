@@ -18,7 +18,6 @@
       <nav class="panel-tabs" aria-label="桌宠功能">
         <button class="active" data-view="notice">通知</button>
         <button data-view="todos">清单 <span id="todoCount">0</span></button>
-        <button data-view="game">小游戏</button>
         <button data-view="settings">设置</button>
         <button data-view="about">关于</button>
       </nav>
@@ -43,14 +42,6 @@
           <details class="manual-add"><summary>手动补一条</summary><input id="todoTitle" placeholder="要做什么"><input id="todoDeadline" type="datetime-local"><input id="todoGap" placeholder="还差什么"><button id="addTodo" class="primary">添加</button></details>
           <div id="catchupSummary" class="catchup-summary"></div>
         </section>
-        <section id="gameView" class="view">
-          <div class="section-title"><div><h2>奶龙玩贪吃蛇</h2><p>规则即时开局；结束后生成复盘。</p></div></div>
-          <canvas id="gameCanvas" width="240" height="240" aria-label="贪吃蛇棋盘"></canvas>
-          <div class="primary-actions"><button id="startGame" class="primary">开始一局</button><button id="finishGame" class="secondary" disabled>结束并复盘</button></div>
-          <label class="switch-row"><span>按需解说（默认关闭）</span><input id="commentaryEnabled" type="checkbox"></label>
-          <button id="requestCommentary" class="secondary wide" disabled>让奶龙说一句</button>
-          <div id="gameLog" class="game-log">还没开局，不会自动调用解说。</div>
-        </section>
         <section id="settingsView" class="view">
           <div class="section-title"><div><h2>模型与本机设置</h2><p>没有 Key 也能完整使用规则版。</p></div></div>
           <label class="field-label">模型开关<select id="modelSwitch"><option value="off">关 · 永远规则版</option><option value="auto">自动 · 有 Key 才启用</option><option value="on">开 · 强制模型</option></select></label>
@@ -64,7 +55,7 @@
         </section>
         <section id="aboutView" class="view about-view">
           <h2>关于这只奶龙</h2>
-          <p>一个角色、一个桌面角落。这里的清单和提醒都由本地功能完成，不提供通用问答或联网搜索。</p>
+          <p>一个角色、一个桌面角落。这里的清单和提醒都由本地功能完成。</p>
           <h3>图像素材署名</h3>
           <p>素材与动作表来源：<a href="https://github.com/zhangkk833-byte/dsh-nailong-pet" data-external>zhangkk833-byte/dsh-nailong-pet</a>；上游图像：<a href="https://github.com/Maple498/nai-wa-codex-pet" data-external>Maple498/nai-wa-codex-pet</a>（Codex Pet v2）。</p>
           <p>图像采用 <a href="https://creativecommons.org/licenses/by/4.0/" data-external>CC BY 4.0</a>。本项目原样使用已切分的 74 张 PNG 与 13 组动作表，未改帧、未补帧、未调色、未修改像素；仅编写本地交互与播放代码。</p>
@@ -73,17 +64,40 @@
       </div>
     </section>
 
-    <section id="bubble" class="bubble" aria-live="polite">
-      <div class="bubble-top"><span id="daysBadge">认识你的第 1 天</span><span id="stageText">初识</span></div>
-      <p id="bubbleText">今天刚认识，点我一下，贴条通知试试。</p>
-      <small id="bubbleNote"></small>
-      <ol id="decisionChain" class="decision-chain"></ol>
-      <div id="keyPrompt" class="key-prompt" hidden><span>想让我读得更准吗？给我一把钥匙就行。</span><div><button id="configureKey">去配置</button><button id="laterKey">以后再说</button></div></div>
+    <section id="bubble" class="bubble" data-expanded="0" aria-live="polite">
+      <div id="bubbleDetail" class="bubble-detail" aria-hidden="true">
+        <div class="bubble-top"><span id="daysBadge">认识你的第 1 天</span><span id="stageText">初识</span></div>
+        <p id="bubbleText">我在这儿，今天的待办我帮你记着。</p>
+        <small id="bubbleNote"></small>
+        <div id="chatPanel" class="chat-panel">
+          <div class="chat-head"><span>随便聊聊</span><label class="agent-toggle" title="第四态：全工具、需审批、可联网；默认关闭"><input id="agentMode" type="checkbox">Agent 模式</label><small id="chatCare"></small></div>
+          <ol id="chatLog" class="chat-log" role="log" aria-live="polite"></ol>
+          <div class="chat-compose">
+            <input id="chatInput" type="text" maxlength="500" placeholder="和奶龙说一句…" autocomplete="off" aria-label="和奶龙说话">
+            <button id="chatSend" type="button" class="chat-send" disabled>发送</button>
+          </div>
+        </div>
+        <ol id="decisionChain" class="decision-chain" hidden></ol>
+        <div id="keyPrompt" class="key-prompt" hidden><span>想让我读得更准吗？给我一把钥匙就行。</span><div><button id="configureKey">去配置</button><button id="laterKey">以后再说</button></div></div>
+      </div>
+      <div id="bubbleChip" class="bubble-chip">
+        <i class="chip-dot" aria-hidden="true"></i>
+        <p id="bubbleCount">正在梳理你的待办…</p>
+        <span id="bubbleNudge"></span>
+      </div>
     </section>
 
     <canvas id="petCanvas" class="pet-canvas" width="192" height="208" tabindex="0" role="button" aria-label="奶龙，单击打开清单，按住拖动；也可按回车打开"></canvas>
+    <div id="thought" class="thought" aria-hidden="true"><span>思考中</span><i></i><i></i><i></i></div>
+    <section id="taskScene" class="task-scene" aria-hidden="true" hidden>
+      <div class="task-scene-head"><i class="task-dot"></i><span id="taskSceneTitle">正在处理</span></div>
+      <div id="taskSceneBody" class="task-scene-body"></div>
+    </section>
     <div id="toast" class="toast" role="status"></div>
   </main>
+  <script src="/static/actions.js"></script>
+  <script src="/static/intents.js"></script>
+  <script src="/static/task-scene.js"></script>
   <script src="/static/pet.js"></script>
   <script src="/static/app.js"></script>
 </body>

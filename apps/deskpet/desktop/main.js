@@ -6,18 +6,20 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 const { installNativeClick } = require('./native-click');
+// 打开外链的白名单只维护在 renderer/intents.js 一处：
+// 渲染层先用它判意图，主进程再用它兜底校验（页面被改也绕不过去）。
+const { isAllowedExternalUrl } = require('./renderer/intents.js');
 
 const ROOT = path.resolve(__dirname, '../../..');
 const PYTHON = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
 const WINDOW_SIZE = { width: 430, height: 760 };
 const SMOKE_TEST = process.env.NAIWA_SMOKE_TEST === '1';
-const SMOKE_UID = '7f2d8882-76b9-4c7b-b45d-74dc38c8c073';
 
 let mainWindow = null;
 let tray = null;
 let backend = null;
 let apiPort = 0;
-let currentUserId = SMOKE_UID;
+let currentUserId = '';
 let isQuitting = false;
 let mouseIgnored = true;
 let cursorTimer = null;
@@ -25,6 +27,7 @@ let disposeNativeClick = null;
 let positionSaveTimer = null;
 let notificationTimer = null;
 let backendGeneration = 0;
+let restartChain = Promise.resolve();
 let runtimeLog = '';
 const notifiedTodos = new Set();
 
@@ -69,6 +72,36 @@ function log(message) {
   const line = String(message);
   runtimeLog = `${runtimeLog}${line}\n`.slice(-65536);
   console.log(line);
+}
+
+// 用户身份只认 userData/settings.json 里这一份：
+// 页面 origin 是 http://127.0.0.1:{动态端口}，每次重启后端端口都会变，
+// 渲染进程 localStorage 跟着换分区——身份若只存 localStorage，
+// 换一次 Key / 重开一次桌宠就会变成「认识你的第 1 天」。
+const UID_PATTERN = /^[0-9a-f-]{36}$/i;
+
+function ensureUserIdentity() {
+  if (SMOKE_TEST) {
+    // 自检必须每次都是「干净的新用户」：固定 uid 会让上一轮留下的待办
+    // 污染 todoCount=0 的断言（业务库在 data/，不随 userData 一起清）。
+    currentUserId = crypto.randomUUID();
+    return currentUserId;
+  }
+  const saved = getSettings();
+  if (typeof saved.userId === 'string' && UID_PATTERN.test(saved.userId)) {
+    currentUserId = saved.userId;
+    return currentUserId;
+  }
+  currentUserId = crypto.randomUUID();
+  updateDesktopSettings({ userId: currentUserId });
+  log(`[startup] 首次分配本机用户 id=${currentUserId}`);
+  return currentUserId;
+}
+
+function appUrl() {
+  const params = [`desktop=1`, `uid=${encodeURIComponent(currentUserId)}`];
+  if (SMOKE_TEST) params.push('smoke=1');
+  return `http://127.0.0.1:${apiPort}/?${params.join('&')}`;
 }
 
 function decryptApiKey() {
@@ -183,12 +216,19 @@ async function startBackend() {
   await waitForBackend(generation);
 }
 
-async function restartBackend() {
-  await stopBackend();
-  await startBackend();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    await mainWindow.loadURL(`http://127.0.0.1:${apiPort}/?desktop=1${SMOKE_TEST ? '&smoke=1' : ''}`);
-  }
+// 串行化：删 Key / 改 Key 可能被连点或并发触发，两个重启交错会互相杀进程、
+// 拿到两个端口、页面挂在前一个上（配完 Key 却请求旧端口的典型现场）。
+function restartBackend() {
+  const run = async () => {
+    await stopBackend();
+    await startBackend();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadURL(appUrl());
+    }
+  };
+  const next = restartChain.then(run, run);
+  restartChain = next.catch(() => {});
+  return next;
 }
 
 function clampPosition(x, y, bounds = { x: 0, y: 0, ...WINDOW_SIZE }) {
@@ -299,11 +339,14 @@ function createWindow() {
     positionSaveTimer = setTimeout(saveWindowPosition, 250);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https:\/\//.test(url)) shell.openExternal(url);
+    // 页面里任何 window.open / target=_blank 一律走同一条白名单：
+    // 只放 https + 白名单域名，http / file / javascript / 内网 全部拒绝。
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    else log(`[open-external] 拒绝打开：${String(url).slice(0, 120)}`);
     return { action: 'deny' };
   });
   mainWindow.once('ready-to-show', () => { if (!SMOKE_TEST) mainWindow.show(); });
-  mainWindow.loadURL(`http://127.0.0.1:${apiPort}/?desktop=1${SMOKE_TEST ? '&smoke=1' : ''}`);
+  mainWindow.loadURL(appUrl());
 }
 
 async function checkDueNotifications() {
@@ -318,32 +361,99 @@ async function checkDueNotifications() {
   } catch {}
 }
 
+// 每个弹窗一个 token，主进程按 token 派发结果，避免多窗口串台。
+const pendingKeyDialogs = new Map();
+// Agent 审批弹窗：同 key-dialog 范式（token + Map 派发）。
+// 后端签发的一次性 approval_id 绑定精确参数；渲染层伪造的「已批准」进不了
+// 后端（approve 接口只认它自己签发的 approval_id）。
+const pendingApprovals = new Map();
+
+// Agent 操作审批窗：展示待审批工具的参数原文（后端已掩码密钥），
+// 返回与 action_requests 等长的 decisions 数组（按下标一一对应）。
+function openApprovalDialog(payload) {
+  return new Promise((resolve) => {
+    const token = crypto.randomUUID();
+    const dialogWindow = new BrowserWindow({
+      width: 560, height: 520, useContentSize: true,
+      parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+      modal: Boolean(mainWindow && !mainWindow.isDestroyed()),
+      show: false, resizable: true, minimizable: false, maximizable: false,
+      fullscreenable: false, skipTaskbar: true,
+      title: 'Agent 操作审批',
+      webPreferences: {
+        preload: path.join(__dirname, 'approval-dialog-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+    dialogWindow.setMenuBarVisibility(false);
+    let settled = false;
+    const finish = (decisions) => {
+      if (settled) return;
+      settled = true;
+      pendingApprovals.delete(token);
+      try { if (!dialogWindow.isDestroyed()) dialogWindow.destroy(); } catch {}
+      resolve(decisions);   // null = 用户关窗/取消 → 渲染层按全部拒绝提交
+    };
+    pendingApprovals.set(token, finish);
+    dialogWindow.once('ready-to-show', () => {
+      dialogWindow.show();
+      dialogWindow.focus();
+    });
+    dialogWindow.on('closed', () => finish(null));
+    dialogWindow.webContents.on('did-finish-load', () => {
+      dialogWindow.webContents.send('approval:payload', {
+        token,
+        approvalId: payload.approval_id,
+        actionRequests: payload.action_requests || []
+      });
+    });
+    dialogWindow.loadFile(path.join(__dirname, 'approval-dialog.html'), { query: { token } })
+      .catch((error) => { log(`[approval] 审批窗加载失败：${error.message}`); finish(null); });
+  });
+}
+
+// Key 输入框改成应用内模态窗口。
+// 原来用 PowerShell 拉 WinForms：它跑在另一个进程里，窗口层级、窗口站、
+// 执行策略任一不对劲就是「弹不出来 → Promise 永挂 → 点了没反应」，
+// 而且失败了完全静默。应用内窗口跟主窗口同一个 parent，必然在奶龙上面，
+// 也能被自动化测试直接驱动，不用再赌外部进程。
 function promptForApiKey() {
   return new Promise((resolve) => {
-    const script = `
-Add-Type -AssemblyName System.Windows.Forms
-$form = New-Object System.Windows.Forms.Form
-$form.Text = '配置 DeepSeek API Key'
-$form.Width = 460; $form.Height = 190; $form.StartPosition = 'CenterScreen'; $form.TopMost = $true
-$label = New-Object System.Windows.Forms.Label
-$label.Text = 'Key 仅由桌面主进程接收并加密保存'; $label.Left = 18; $label.Top = 16; $label.Width = 400
-$box = New-Object System.Windows.Forms.TextBox
-$box.Left = 18; $box.Top = 48; $box.Width = 400; $box.UseSystemPasswordChar = $true
-$ok = New-Object System.Windows.Forms.Button
-$ok.Text = '保存'; $ok.Left = 240; $ok.Top = 90; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
-$cancel = New-Object System.Windows.Forms.Button
-$cancel.Text = '取消'; $cancel.Left = 335; $cancel.Top = 90; $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-$form.Controls.AddRange(@($label,$box,$ok,$cancel)); $form.AcceptButton = $ok; $form.CancelButton = $cancel
-if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($box.Text.Trim()) }
-$form.Dispose()
-`;
-    const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-      stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true
+    const token = crypto.randomUUID();
+    const dialogWindow = new BrowserWindow({
+      width: 520, height: 340, useContentSize: true,
+      parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+      modal: Boolean(mainWindow && !mainWindow.isDestroyed()),
+      show: false, resizable: false, minimizable: false, maximizable: false,
+      fullscreenable: false, skipTaskbar: true,
+      title: '配置 DeepSeek API Key',
+      webPreferences: {
+        preload: path.join(__dirname, 'key-dialog-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
     });
-    let output = '';
-    child.stdout.on('data', (chunk) => { output += chunk.toString(); });
-    child.on('error', () => resolve(''));
-    child.on('close', () => resolve(output.trim()));
+    dialogWindow.setMenuBarVisibility(false);
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      pendingKeyDialogs.delete(token);
+      try { if (!dialogWindow.isDestroyed()) dialogWindow.destroy(); } catch {}
+      resolve(String(value || '').trim().replace(/^Bearer\s+/i, ''));
+    };
+    pendingKeyDialogs.set(token, finish);
+    dialogWindow.once('ready-to-show', () => {
+      dialogWindow.show();
+      dialogWindow.focus();
+      dialogWindow.webContents.focus();
+    });
+    dialogWindow.on('closed', () => finish(''));
+    dialogWindow.loadFile(path.join(__dirname, 'key-dialog.html'), { query: { token } })
+      .catch((error) => { log(`[key] 输入框加载失败：${error.message}`); finish(''); });
   });
 }
 
@@ -365,6 +475,38 @@ function showPetMenu() {
   ]).popup({ window: mainWindow });
 }
 
+const SMOKE_DIALOG_KEY = 'sk-smoke-dialog-probe-0000';
+
+// 回归守卫：Key 输入框必须能弹出来、并且把用户输入交回主进程。
+// 之前用 PowerShell 拉 WinForms —— 窗口建在别的窗口站、被置顶窗口挡、或外部
+// 进程卡住时，Promise 永远不 settle，界面上只留一句「正在打开输入框」，
+// 用户看到的就是「点了没反应」。这条守的是「点了必有一个能用的输入框」，
+// 且不再依赖任何外部进程。
+async function probeKeyDialog() {
+  const pending = promptForApiKey();
+  let dialog = null;
+  for (let i = 0; i < 80; i += 1) {
+    dialog = BrowserWindow.getAllWindows().find((win) => !win.isDestroyed()
+      && win.webContents.getURL().includes('key-dialog.html'));
+    if (dialog && !dialog.webContents.isLoading()) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!dialog) return { opened: false, submitted: null };
+  try {
+    await dialog.webContents.executeJavaScript(
+      `(() => { const box = document.querySelector('#key');`
+      + ` box.value = ${JSON.stringify(SMOKE_DIALOG_KEY)};`
+      + ' document.querySelector("#save").click(); return true; })()');
+  } catch (error) {
+    return { opened: true, submitted: null, error: error.message };
+  }
+  const value = await Promise.race([
+    pending,
+    new Promise((resolve) => setTimeout(() => resolve('__TIMEOUT__'), 5000))
+  ]);
+  return { opened: true, submitted: value };
+}
+
 async function runSmokeTest() {
   const evidence = { pass: false };
   try {
@@ -384,6 +526,9 @@ async function runSmokeTest() {
       };
       $('#petCanvas').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
       const opened = !$('#panel').hidden;
+      // 样例按钮由渲染层异步生成（app.js renderNoticeSamples → dataset.sample），
+      // 固定 sleep 会跟它抢跑：启动慢一点就 null.click() 直接抛错。
+      for (let i = 0; i < 100 && !$('[data-sample]'); i += 1) await wait(100);
       $('[data-sample]').click();
       const sampleOnlyFills = $('#noticeText').value.length > 0 && $$('#todoList .todo-item').length === 0;
       $('#parseNotice').click();
@@ -407,7 +552,9 @@ async function runSmokeTest() {
         todosAfterConfirm: $$('#todoList .todo-item').length,
         exportReady: Boolean($('#exportResult a')),
         simulated,
-        commentaryDefaultOff: !$('#commentaryEnabled').checked,
+        // 会话 5：小游戏下架，这里顺手记下「动作调度层在线」的证据
+        actionKeys: Object.keys(window.ActionDirector.ACTIONS).length,
+        actionNow: document.querySelector('#petScene').dataset.action,
         modelCalls: (await (await fetch('/api/debug/model-calls')).json()).total
       };
     })()`);
@@ -417,6 +564,7 @@ async function runSmokeTest() {
     evidence.refreshRealDays = await mainWindow.webContents.executeJavaScript(`document.querySelector('#daysBadge').textContent`);
     evidence.refreshCollapsed = await mainWindow.webContents.executeJavaScript(`document.querySelector('#panel').hidden`);
     evidence.noKeyStatus = await apiRequest('GET', '/api/key/status');
+    evidence.keyDialog = await probeKeyDialog();
     evidence.dynamicPort = apiPort !== 8000 && apiPort > 0;
     evidence.loopbackOnly = backend.spawnargs.includes('127.0.0.1') && !backend.spawnargs.includes('0.0.0.0');
 
@@ -432,12 +580,20 @@ async function runSmokeTest() {
       logs: runtimeLog.includes(secret)
     };
     evidence.injectedModelCalls = (await apiRequest('GET', '/api/debug/model-calls')).total;
-    await apiRequest('DELETE', '/api/key');
+    // 与 key:delete 的真实顺序一致：先让后端清 env，再删加密份，最后换进程
+    try { await apiRequest('DELETE', '/api/key'); } catch {}
     const afterDelete = getSettings();
     delete afterDelete.encryptedKey;
     writeJson(settingsFile(), afterDelete);
+    evidence.deletedKeyStatusBeforeRestart = await apiRequest('GET', '/api/key/status');
+    await restartBackend();
+    await new Promise((resolve) => setTimeout(resolve, 700));
     evidence.deletedKeyStatus = await apiRequest('GET', '/api/key/status');
     evidence.publicAfterDelete = publicDesktopSettings();
+    evidence.uidAfterRestart = await mainWindow.webContents.executeJavaScript(
+      `localStorage.getItem('deskpet_uid')`);
+    evidence.sameUserAfterRestart = evidence.uidAfterRestart === currentUserId;
+    evidence.deletedModelCalls = (await apiRequest('GET', '/api/debug/model-calls')).total;
 
     mainWindow.close();
     evidence.closeToTray = Boolean(mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible() && tray);
@@ -450,12 +606,15 @@ async function runSmokeTest() {
       ui.opened && ui.sampleOnlyFills && ui.parsed.decisionStates >= 4 && ui.parsed.checklistItems > 0 &&
       ui.parsed.degraded && ui.parsed.degradedText.includes('规则版，未调模型') && ui.parsed.keyPromptAfterParse &&
       ui.todosAfterConfirm > 0 && ui.exportReady && ui.simulated.includes('30') &&
-      ui.commentaryDefaultOff && ui.modelCalls === 0 && evidence.refreshRealDays.includes('第 1 天') &&
+      ui.actionKeys >= 8 && ui.modelCalls === 0 && evidence.refreshRealDays.includes('第 1 天') &&
       evidence.refreshCollapsed && evidence.noKeyStatus.configured === false && evidence.dynamicPort &&
+      evidence.keyDialog && evidence.keyDialog.opened && evidence.keyDialog.submitted === SMOKE_DIALOG_KEY &&
       evidence.loopbackOnly && evidence.injectedKeyStatus.configured === true &&
       evidence.injectedKeyStatus.masked_tail === secret.slice(-4) &&
       !evidence.keyLeakChecks.renderer && !evidence.keyLeakChecks.commandLine && !evidence.keyLeakChecks.logs &&
-      evidence.injectedModelCalls === 0 && evidence.deletedKeyStatus.configured === false &&
+      evidence.injectedModelCalls === 0 && evidence.deletedKeyStatusBeforeRestart.configured === false &&
+      evidence.deletedKeyStatus.configured === false &&
+      evidence.sameUserAfterRestart &&
       !evidence.publicAfterDelete.hasKey && evidence.closeToTray && evidence.trayReopen && evidence.notificationShowReturned
     );
   } catch (error) {
@@ -468,13 +627,18 @@ async function runSmokeTest() {
 }
 
 app.whenReady().then(async () => {
+  ensureUserIdentity();
   await startBackend();
   createTray();
   createWindow();
   ipcMain.handle('runtime:get', () => ({ host: '127.0.0.1', port: apiPort }));
   ipcMain.handle('desktop:settings:get', () => publicDesktopSettings());
   ipcMain.on('user:identity', (_event, uid) => {
-    if (typeof uid === 'string' && /^[0-9a-f-]{36}$/i.test(uid)) currentUserId = uid;
+    // 身份以主进程这份为准（随 URL 下发给页面）；页面回传只做一致性校验，
+    // 不允许另一份 uid 覆盖，否则重启后又分裂成两个「用户」。
+    if (typeof uid === 'string' && UID_PATTERN.test(uid) && uid !== currentUserId) {
+      log(`[identity] 忽略页面回传的陌生 uid=${uid}`);
+    }
   });
   ipcMain.on('mouse:passthrough', (_event, ignore) => {
     if (mainWindow) {
@@ -494,24 +658,60 @@ app.whenReady().then(async () => {
   });
   ipcMain.on('desktop:mute', (_event, value) => updateDesktopSettings({ muted: Boolean(value) }));
   ipcMain.on('desktop:theme', (_event, value) => updateDesktopSettings({ theme: value === 'night' ? 'night' : 'day' }));
+  ipcMain.on('key-dialog:result', (event, payload) => {
+    if (!payload || typeof payload.token !== 'string') return;
+    // token 是每次弹窗随机生成的，只存在于主进程映射表里；
+    // 查不到就忽略，页面里别的东西没法靠伪造 action 触发「已保存」
+    const finish = pendingKeyDialogs.get(payload.token);
+    if (typeof finish !== 'function') return;
+    finish(payload.action === 'submit' ? payload.value : '');
+  });
+  ipcMain.handle('approval:request', (_event, payload) => {
+    // 渲染层只能请求弹窗，不能自己宣布结果：决定必须经真实窗口回来
+    if (!payload || !Array.isArray(payload.action_requests)) return null;
+    return openApprovalDialog(payload);
+  });
+  ipcMain.on('approval-dialog:result', (_event, payload) => {
+    if (!payload || typeof payload.token !== 'string') return;
+    const finish = pendingApprovals.get(payload.token);
+    if (typeof finish !== 'function') return;
+    if (payload.action === 'decide' && Array.isArray(payload.decisions)) {
+      const clean = payload.decisions.map((d) =>
+        (d && d.type === 'approve') ? { type: 'approve' } : { type: 'reject' });
+      finish(clean);
+    } else {
+      finish(null);   // 取消/关窗 → 渲染层按全部拒绝提交
+    }
+  });
   ipcMain.handle('key:change', async () => {
     const key = await promptForApiKey();
-    if (!key) return publicDesktopSettings();
+    // 用户取消不是失败，也不是成功：如实回一个 saved=false，界面别撒谎
+    if (!key) return { ...publicDesktopSettings(), saved: false };
     if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用，未保存 Key');
     updateDesktopSettings({ encryptedKey: safeStorage.encryptString(key).toString('base64') });
+    // 换 Key 必须换进程：Python 子进程的 env 是 spawn 那一刻拷进去的，
+    // 不重启的话新 Key 永远进不了后端（旧 Key 也永远出不去）。
     await restartBackend();
-    return publicDesktopSettings();
+    return { ...publicDesktopSettings(), saved: true };
   });
   ipcMain.handle('key:delete', async () => {
-    try { await apiRequest('DELETE', '/api/key'); } catch {}
+    // 三条都要做，缺一条就是「删了 Key 却还能调模型」：
+    // 1) 通知后端立刻清掉注入的环境变量并重置懒加载态（不等重启）；
+    // 2) 删掉 userData 里的 safeStorage 加密份；
+    // 3) 重启后端子进程——旧 env 只在进程内存里，只有换进程才算真删干净。
+    try { await apiRequest('DELETE', '/api/key'); } catch (error) { log(`[key] DELETE /api/key 失败，靠重启兜底：${error.message}`); }
     const saved = getSettings();
     delete saved.encryptedKey;
     writeJson(settingsFile(), saved);
+    await restartBackend();
     return publicDesktopSettings();
   });
   ipcMain.handle('key:check', () => apiRequest('POST', '/api/key/check', {}));
   ipcMain.handle('notification:test', () => notify('奶龙提醒', '这是一条本机测试通知'));
-  ipcMain.on('app:open-external', (_event, url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); });
+  ipcMain.on('app:open-external', (_event, url) => {
+    if (isAllowedExternalUrl(url)) shell.openExternal(url);
+    else log(`[open-external] 拒绝打开：${String(url).slice(0, 120)}`);
+  });
   ipcMain.handle('dialog:error', (_event, message) => dialog.showMessageBox(mainWindow, { type: 'error', message: String(message).slice(0, 300) }));
   notificationTimer = setInterval(checkDueNotifications, 60000);
   setTimeout(checkDueNotifications, 3000);

@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('deskpetShell', {
   checkKey: () => ipcRenderer.invoke('key:check'),
   testNotification: () => ipcRenderer.invoke('notification:test'),
   openExternal: (url) => ipcRenderer.send('app:open-external', url),
+  // Agent 审批：渲染层发起弹窗请求，主进程弹真实模态窗并回传决定数组
+  requestApproval: (payload) => ipcRenderer.invoke('approval:request', payload),
   onCommand: (callback) => {
     const listener = (_event, command) => callback(command);
     ipcRenderer.on('pet:command', listener);

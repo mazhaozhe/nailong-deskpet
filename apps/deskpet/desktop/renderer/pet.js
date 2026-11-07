@@ -14,6 +14,9 @@ class PetController {
     this.frameIndex = -1;
     this.ignoreMouse = null;
     this.idleIndex = 0;
+    // 会话 5：true = 当前动作由 ActionDirector 持有，本文件不再自动回 idle、
+    // 也不轮播空闲动作（否则 30 秒到点会跟调度层抢帧）。
+    this.hold = false;
     canvas.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -69,8 +72,9 @@ class PetController {
 
   cursor(point) {
     if (!this.shell) return;
+    // 常驻的小气泡只做 hover 目标，始终点击穿透；详情框展开后 pointer-events 变 auto，才接管鼠标。
     const element = document.elementFromPoint(point.x, point.y);
-    const interactive = element?.closest('.panel,.bubble') || this.hitTest(point);
+    const interactive = element?.closest('.panel,.bubble-detail') || this.hitTest(point);
     const ignore = !interactive;
     if (ignore !== this.ignoreMouse) {
       this.ignoreMouse = ignore;
@@ -90,12 +94,13 @@ class PetController {
     return true;
   }
 
-  react() {
-    this.switchTo('wave');
-  }
-
-  work() {
-    this.switchTo('work');
+  // 会话 5：调度层接管/交还。「接管期间不自动回 idle、不轮播 idle」是硬要求，
+  // 否则被提起来 / 思考中的姿态会在 30 秒到点被 tick() 抢回 idle。
+  setHold(hold) {
+    const next = Boolean(hold);
+    if (next === this.hold) return;
+    this.hold = next;
+    if (!next) this.idleAt = performance.now() + 30000;
   }
 
   tick(now) {
@@ -104,16 +109,22 @@ class PetController {
     const animation = this.current;
     const count = animation.frames.length;
     const elapsed = Math.floor(Math.max(0, now - this.startedAt) * animation.fps / 1000);
-    if (!animation.loop && !animation.hold && elapsed >= count * (animation.repeat || 1)) {
-      this.switchTo('idle');
-      return;
+    if (!this.hold) {
+      if (!animation.loop && !animation.hold && elapsed >= count * (animation.repeat || 1)) {
+        this.switchTo('idle');
+        return;
+      }
+      if (now >= this.idleAt) {
+        const actions = ['idle2', 'sit', 'idle3', 'sleep', 'idle4', 'idle'];
+        this.switchTo(actions[this.idleIndex++ % actions.length]);
+        return;
+      }
     }
-    if (now >= this.idleAt) {
-      const actions = ['idle2', 'sit', 'idle3', 'sleep', 'idle4', 'idle'];
-      this.switchTo(actions[this.idleIndex++ % actions.length]);
-      return;
-    }
-    const index = animation.loop ? elapsed % count : Math.min(elapsed, count * (animation.repeat || 1) - 1) % count;
+    // 被调度层持有的动作一律按循环放帧：work/laugh/shy 这些 repeat 有限的动作
+    // 不能自己播完就定住，否则「思考中」几分钟后画面就僵在那里。
+    const index = (this.hold || animation.loop)
+      ? elapsed % count
+      : Math.min(elapsed, count * (animation.repeat || 1) - 1) % count;
     if (index === this.frameIndex) return;
     this.frameIndex = index;
     const frame = animation.frames[index];

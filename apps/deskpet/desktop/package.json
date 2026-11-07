@@ -9,7 +9,7 @@
     "dev": "electron . --dev",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis",
-    "test": "node --test ../../../tests/desktop/test_pet_drag.cjs ../../../tests/desktop/test_petex_drag.cjs ../../../tests/desktop/test_native_click.cjs ../../../tests/desktop/test_game_ui.cjs",
+    "test": "node --test ../../../tests/desktop/test_pet_drag.cjs ../../../tests/desktop/test_petex_drag.cjs ../../../tests/desktop/test_native_click.cjs ../../../tests/desktop/test_actions.cjs",
     "test:window": "electron ../../../tests/desktop/test_pet_drag_electron.cjs"
   },
   "devDependencies": {
