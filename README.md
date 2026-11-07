@@ -123,36 +123,7 @@ Remove-Item Env:NAIWA_SMOKE_TEST -ErrorAction SilentlyContinue
 
 ---
 
-## 六、下载与交接
-
-Windows 安装包发布后从 [GitHub Releases](https://github.com/mazhaozhe/nailong-deskpet/releases) 下载；本仓库当前源码可直接按第二节在本机运行。
-
-> **接手开发请先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)**：环境重建、自检判据、不许改的红线、阶段 6/7 待办（含打包 P0 的具体做法）都在那里。
-
-### 上传 / 提交前自检
-
-1. 确认仓库里**没有 `.env`**（真实 Key 不能进仓库，也不能进阶段 7 打包的 exe）。
-2. `.gitignore` 已忽略 `.env` / `.venv` / `apps/deskpet/desktop/node_modules/` / `data/` / 各类缓存；分批提交时用精确路径 `git add`，先 `git status` 核对。
-3. `apps/deskpet/desktop/assets/nailong/` 必须随仓库保留（74 张 PNG + `manifest.json` + `ASSET-LICENSE.md`）；README 署名段、`docs/RELEASE.md`、应用内「关于」三处 CC BY 4.0 署名不可删。
-4. 桌宠运行不需要 `.env`；`.env.example` 只是占位符模板，Key 由使用者在应用内填写。
-
-### 当前进度与待办
-
-阶段 1–5 已完成；此后增补了自由闲聊与可选的完整 Agent 模式，并下架了早期的小游戏模块。阶段 6（博客 / PPT / 需求文档 / 答辩）、阶段 7（打包 exe + GitHub Release）未开工。
-
-答辩演示只展示本机真实状态三步 —— 规则版主流程 → 记忆补报 → 托盘通知；不预置任何演示数据。自由闲聊与 Agent 模式默认关闭，作为可选能力在 PPT 与问答环节另行说明。
-
-已知待办：
-
-1. `apps/deskpet/desktop/package.json` 的 `build.files` 目前只含桌面端文件，缺 `apps/deskpet/backend/`、`infrastructure/`、`config/` 与 Python 运行时，按现状打包 exe 起不来；
-2. `storage.py` 的 `DB_PATH` 相对启动目录，装到只读安装目录会写不进，打包时须一并改为可写的用户数据目录；
-3. 打包须显式排除 `.env`，并验证启动链不加载它；
-4. `tests/agent/test_registry.py` 的 6 处 import 路径同步后即可让 `full` 回到全绿；
-5. 发布 exe 后补齐 Release 说明与本机真实截图 / GIF。
-
----
-
-## 七、素材与第三方许可
+## 六、素材与第三方许可
 
 **奶龙图像与动作表**：来源 [zhangkk833-byte/dsh-nailong-pet](https://github.com/zhangkk833-byte/dsh-nailong-pet)；上游图像来源 [Maple498/nai-wa-codex-pet](https://github.com/Maple498/nai-wa-codex-pet)（Codex Pet v2）。图像许可证 [Creative Commons Attribution 4.0 International（CC BY 4.0）](https://creativecommons.org/licenses/by/4.0/)。
 
