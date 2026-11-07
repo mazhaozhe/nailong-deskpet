@@ -14,7 +14,7 @@
 
 ## 安装与启动（Windows，两步）
 
-1. 从 [GitHub Releases](https://github.com/mazhaozhe/nailong-deskpet/releases) 下载 `奶龙桌宠 Setup 1.0.0.exe`，双击安装（可自选安装目录）。
+1. 从 [GitHub Releases](https://github.com/mazhaozhe/nailong-deskpet/releases) 下载下方 Assets 里的 `Setup.1.0.0.exe`（约 140 MB；本地构建产物名为 `奶龙桌宠 Setup 1.0.0.exe`，上传后 GitHub 会规范化附件名），双击安装（可自选安装目录）。
 2. 安装完成后双击桌面上的「奶龙桌宠」。
 
 **无需安装 Python、无需 pip、无需 API Key、无需联网**即可跑完整规则版主流程：贴通知 → 拆清单 → 落待办 → 导出 docx。安装包自带裁剪后的 Python 运行时（解释器 + 标准库 + 运行依赖），装完即用。
@@ -46,4 +46,5 @@
 
 - 打包前会自动组装包内运行时（`scripts/assemble-runtime.mjs`，从本机 base Python 拷解释器 + 标准库 + DLL，再挂 `.venv` 的运行依赖），产物在 `apps/deskpet/desktop/build-runtime/`，不随仓库提交。
 - 源码开发态仍走本机 `.venv`（`npm start` 不变）；打包态只认包内 `resources\runtime\python.exe`，缺了就提示重新安装，不会回退到系统 Python。
-- 安装包尚未上传 Releases，上传由项目维护者在本地完成；签名与杀软适配留待后续。已在本机只读安装目录 + PATH 中剔除 Python 的环境做过实测（安装版自检 `DESKTOP_SMOKE pass:true`、包内解释器 `import fastapi/uvicorn/docx/langchain` 通过、新建待办重启后仍在）。
+- **已发布 [v1.0.0](https://github.com/mazhaozhe/nailong-deskpet/releases/tag/v1.0.0)**：Release 页提供 `Setup.1.0.0.exe`（143,051,095 字节，约 140 MB），已核对远端附件与本机构建产物的 sha256 一致；GitHub 自动附带的 `Source code (zip/tar.gz)` 只是 tag 快照，主交付是 exe。
+- 安装版实测：本机完成 NSIS 安装器双击安装，并在只读安装目录 + PATH 中剔除 Python 的环境下验证通过（安装版自检 `DESKTOP_SMOKE pass:true`、包内解释器 `import fastapi/uvicorn/docx/langchain` 通过、新建待办重启后仍在）。安装包未做代码签名，首次运行可能触发 SmartScreen；签名与杀软适配留待后续。
