@@ -4,6 +4,15 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // 阶段 9：后端 deadline 是带时区的 ISO，<input type="datetime-local"> 只认本地
+  // 时区的 YYYY-MM-DDTHH:mm。绝不能用 toISOString().slice(0,16)——那是 UTC，会差 8 小时。
+  const toLocalInput = (iso) => {
+    if (!iso) return '';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const p = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+  };
   // 会话 5：动作调度的常量从 actions.js 取（单一事实源，不在两处各写一份优先级）
   const { ActionDirector, PRIORITY } = window;
   const intents = window.DeskpetIntents || { detectOpenIntent: () => null, detectTaskIntent: () => null };
@@ -80,6 +89,8 @@
       this.bubbleTimer = null;
       this.pointer = null;
       this.todosLoaded = false;
+      // 阶段 9：待办行下方的问答区，同一时刻只允许一个展开
+      this.qaOpen = null;
       // ---- 会话 3：hover 展开的聊天框 ----
       this.chatSession = crypto.randomUUID ? crypto.randomUUID() : `chat-${Date.now()}`;
       this.chatTurns = [];       // 最近 ≤6 轮，回传做 history 播种（后端有记录时以后端为准）
@@ -179,6 +190,12 @@
       $('#confirmChecklist').addEventListener('click', () => this.confirmChecklist());
       $('#exportDocx').addEventListener('click', () => this.exportDocx());
       $('#addTodo').addEventListener('click', () => this.addTodo());
+      $('#voiceParse').addEventListener('click', () => this.parseVoice());
+      $('#voiceText').addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        this.parseVoice();
+      });
       $('#laterKey').addEventListener('click', () => { this.keyPromptDismissed = true; $('#keyPrompt').hidden = true; });
       $('#configureKey').addEventListener('click', () => { this.openPanel(); this.showView('settings'); });
       $('#changeKey').addEventListener('click', () => this.changeKey());
@@ -753,6 +770,8 @@
       $('#todoCount').textContent = String(this.todos.length);
       const list = $('#todoList');
       list.replaceChildren();
+      // 列表重建 = 旧的问答区随之消失，引用要一起清掉，否则会留着个游离节点
+      this.qaOpen = null;
       if (!this.todos.length) {
         const empty = document.createElement('div');
         empty.className = 'empty-state';
@@ -780,16 +799,108 @@
         const deadline = todo.deadline ? new Date(todo.deadline).toLocaleString('zh-CN') : '无截止时间';
         detail.textContent = `${deadline}${todo.gap ? ` · 还差 ${todo.gap}` : ''}`;
         body.append(title, detail);
+        // 阶段 9：每条待办一个「问」入口（只读问答，不写库、不改状态）
+        const actions = document.createElement('div');
+        actions.className = 'todo-actions';
+        const ask = document.createElement('button');
+        ask.type = 'button';
+        ask.className = 'secondary qa-toggle';
+        ask.textContent = '问';
+        ask.setAttribute('aria-label', `问一句：${todo.title}`);
+        ask.addEventListener('click', () => this.toggleTodoQa(row, todo));
         const remove = document.createElement('button');
         remove.textContent = '删';
         remove.setAttribute('aria-label', `删除 ${todo.title}`);
         remove.addEventListener('click', async () => { await this.api.delete(`/todos/${todo.id}`); await this.loadTodos(); });
-        row.append(checkbox, body, remove);
+        actions.append(ask, remove);
+        row.append(checkbox, body, actions);
         list.append(row);
       }
       const pending = this.todos.filter((todo) => todo.status !== 'done').length;
       $('#catchupSummary').textContent = pending ? `还有 ${pending} 条待完成，奶龙会按截止时间提醒。` : '这一批都完成了，做得很好。';
       this.updateBubbleSummary();
+    }
+
+    // ---- 阶段 9：待办内一问一答（只聊当前这一条，不写库） ----
+    toggleTodoQa(row, todo) {
+      if (this.qaOpen) {
+        const sameRow = this.qaOpen.dataset.todoId === todo.id;
+        this.qaOpen.remove();
+        this.qaOpen = null;
+        if (sameRow) return;
+      }
+      const panel = document.createElement('div');
+      panel.className = 'todo-qa';
+      panel.dataset.todoId = todo.id;
+      const input = document.createElement('input');
+      input.className = 'qa-input';
+      input.type = 'text';
+      input.maxLength = 200;
+      input.placeholder = '问一句，比如「这条还差什么」';
+      input.setAttribute('aria-label', `关于「${todo.title}」的提问`);
+      const send = document.createElement('button');
+      send.type = 'button';
+      send.className = 'secondary qa-send';
+      send.textContent = '问';
+      const answer = document.createElement('div');
+      answer.className = 'qa-answer';
+      answer.setAttribute('role', 'status');
+      const submit = () => this.askTodo(todo, panel);
+      send.addEventListener('click', submit);
+      input.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        submit();
+      });
+      panel.append(input, send, answer);
+      row.after(panel);
+      this.qaOpen = panel;
+      input.focus();
+    }
+
+    async askTodo(todo, panel) {
+      const input = panel.querySelector('.qa-input');
+      const send = panel.querySelector('.qa-send');
+      const answer = panel.querySelector('.qa-answer');
+      const question = (input.value || '').trim();
+      if (!question) return;            // 空问题不发请求
+      send.disabled = true;
+      answer.classList.remove('degraded', 'error');
+      answer.textContent = '正在问…';
+      try {
+        const result = await this.api.post('/task/qa', { todo_id: todo.id, question });
+        const content = (result && result.content) || '';
+        const degraded = Boolean(result && (result.degraded || result.type === 'degrade'));
+        if (degraded) {
+          // 降级必须看得见：灰底 + 明确的「模型没干活」口径，不许当成功
+          answer.classList.add('degraded');
+          const head = content.includes('模型暂不可用') ? '' : '模型暂不可用，以下是规则结果：';
+          answer.textContent = `${head}${content || '当前任务还差的信息还没读到'}（规则兜底）`;
+        } else if (result && result.type === 'done') {
+          answer.textContent = content || '（模型这次没给出内容，再问一次试试）';
+          const suggestions = Array.isArray(result.suggestions) ? result.suggestions.filter(Boolean) : [];
+          if (suggestions.length) {
+            const chips = document.createElement('div');
+            chips.className = 'qa-chips';
+            suggestions.forEach((text) => {
+              const chip = document.createElement('span');
+              chip.className = 'qa-chip';
+              chip.textContent = text;
+              chips.append(chip);
+            });
+            answer.append(chips);
+          }
+        } else {
+          // type === 'error'（任务不存在等）：红字说明，不弹 alert
+          answer.classList.add('error');
+          answer.textContent = content || '未找到关联任务，请核对任务 ID';
+        }
+      } catch (error) {
+        answer.classList.add('error');
+        answer.textContent = `问不成：${error.message}`;
+      } finally {
+        send.disabled = false;
+      }
     }
 
     async parseNotice() {
@@ -874,6 +985,48 @@
         this.setBubble(this.reminderLine(pending), this.nearestDeadline(pending));
         this.showView('todos');
       } catch (error) { this.toast(error.message); }
+    }
+
+    // ---- 阶段 9：一句话补待办（只解析、只回填，落库仍由用户点「添加」） ----
+    async parseVoice() {
+      const hint = $('#voiceHint');
+      const text = $('#voiceText').value.trim();
+      hint.classList.remove('error', 'degraded');
+      if (!text) {
+        hint.textContent = '先写一句话，比如「周五前交实验报告」。';
+        return;
+      }
+      const button = $('#voiceParse');
+      button.disabled = true;
+      hint.textContent = '正在解析这句话…';
+      try {
+        const result = await this.api.post('/todo/from-voice', { text });
+        const data = (result && result.data) || {};
+        const title = typeof data.title === 'string' ? data.title.trim() : '';
+        const confidence = Number.isFinite(data.confidence)
+          ? `置信度 ${Math.round(data.confidence * 100)}%`
+          : '置信度未知';
+        // 回填，不落库：用户改完点「添加」才走 addTodo()
+        if (title) $('#todoTitle').value = title;
+        if (data.deadline) $('#todoDeadline').value = toLocalInput(data.deadline);
+        if (result && result.degraded) {
+          // 降级也要说清楚：这是规则解析的结果，不是模型给的
+          const reason = result.degrade_reason ? `：${result.degrade_reason}` : '';
+          hint.classList.add('degraded');
+          hint.textContent = `规则解析（${confidence}）${reason} · 核对后再点「添加」，不会自动落库`;
+        } else if (!title) {
+          hint.classList.add('degraded');
+          hint.textContent = `没解析出标题（${confidence}），把要做的事写具体点再试`;
+        } else {
+          hint.textContent = `已解析（${confidence}）· 核对后再点「添加」，不会自动落库`;
+        }
+      } catch (error) {
+        // 失败不清空用户已输入的内容
+        hint.classList.add('error');
+        hint.textContent = `解析失败：${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
     }
 
     async addTodo() {

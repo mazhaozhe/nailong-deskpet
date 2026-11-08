@@ -39,7 +39,7 @@
         <section id="todosView" class="view">
           <div class="section-title"><div><h2>逐条交付</h2><p>勾选完成，下次打开还会记得。</p></div></div>
           <div id="todoList" class="todo-list"></div>
-          <details class="manual-add"><summary>手动补一条</summary><input id="todoTitle" placeholder="要做什么"><input id="todoDeadline" type="datetime-local"><input id="todoGap" placeholder="还差什么"><button id="addTodo" class="primary">添加</button></details>
+          <details class="manual-add"><summary>手动补一条</summary><div class="voice-add"><input id="voiceText" placeholder="一句话：周五前交实验报告"><button id="voiceParse" class="secondary">解析</button><span id="voiceHint" class="status-text"></span></div><input id="todoTitle" placeholder="要做什么"><input id="todoDeadline" type="datetime-local"><input id="todoGap" placeholder="还差什么"><button id="addTodo" class="primary">添加</button></details>
           <div id="catchupSummary" class="catchup-summary"></div>
         </section>
         <section id="settingsView" class="view">
