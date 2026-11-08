@@ -70,7 +70,14 @@ const SITE_SKIP = [
   /^setuptools(-|$)/i,
   /^pkg_resources(-|$)/i,
   /^_distutils_hack(-|$)/i,
-  /^wheel(-|$)/i
+  /^wheel(-|$)/i,
+  // 只在开发机上装了、产品运行时零引用，合计约 186 MB，不进包：
+  //   pymupdf / pymupdf4llm / pymupdf_layout —— PDF 解析实际走 pypdf（apps/agent/runtime/uploads.py）；
+  //   onnxruntime —— pymupdf 的 layout 模型运行时，随 pymupdf 一起进来的；
+  //   matplotlib —— 只服务离线出图脚本（需求文档 gen_figs.py），产品内无 import。
+  /^pymupdf/i,
+  /^onnxruntime(-|$)/i,
+  /^matplotlib(-|$)/i
 ];
 
 const skipStdlibDir = (name) => STDLIB_SKIP_DIRS.has(name);
