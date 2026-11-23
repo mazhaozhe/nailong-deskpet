@@ -239,12 +239,10 @@ def test_main_flow_model_call_blocked(monkeypatch, tmp_path):
         "todo_ids": [todo_id], "title": "待办交付清单"})
     assert r.status_code == 200, f"导出失败: {r.status_code} {r.text}"
 
-    # 成长 + 模拟 + 清除（P0-3 新入口）
+    # 成长与真实日期刷新
     r = client.get("/api/growth")
     assert r.status_code == 200
-    r = client.post("/api/growth/simulate", json={"target_day": 30})
-    assert r.status_code == 200
-    r = client.post("/api/growth/simulate/clear")
+    r = client.post("/api/growth/sync", json={})
     assert r.status_code == 200
 
     # 会话 5：内置小游戏（路由 + 游戏包 + 前端 tab）已整体下架。

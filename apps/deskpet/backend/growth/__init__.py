@@ -1,12 +1,14 @@
 """apps.deskpet.backend.growth —— 成长状态 + 补报 + greeting 模板
 
-greeting 由 PersonaStage 模板表确定性生成，绝不调模型。
-brief 第六节：漏了不扣（不惩罚），按时完成 +1 亲密度。
+greeting 由 PersonaStage 模板表确定性生成。
 """
 
 from __future__ import annotations
 
-from apps.deskpet.backend.models import CatchupSnapshot, PersonaStage
+from datetime import datetime
+
+from apps.deskpet.backend import clock
+from apps.deskpet.backend.models import CatchupSnapshot, PersonaStage, TodoItem
 
 
 GREETING_TEMPLATES = {
@@ -33,10 +35,8 @@ def greeting_for(stage: PersonaStage, days: int) -> str:
 
 
 def build_catchup(*, user_id: str, days_known: int,
-                  todos: list) -> CatchupSnapshot:
+                  todos: list[TodoItem], now: datetime) -> CatchupSnapshot:
     """按当前时间 vs deadline 重算补报（不做事后定时器）。"""
-    from apps.deskpet.backend import clock
-    now = clock.now(user_id)  # 传 user_id：补报只吃该用户自己的模拟态（P0-3）
     overdue, due_soon, pending = [], [], []
     DUE_SOON_HOURS = 48
 

@@ -26,9 +26,15 @@ pydantic>=2.7
 pydantic-settings>=2.2
 
 # --- 文档生成 ---
-python-docx>=1.1
+python-docx>=1.2
 openpyxl>=3.1
 python-pptx>=1.0
+
+# --- 通知文档读取与离线中英文 OCR ---
+pypdf>=6.0
+pypdfium2>=5.15,<6
+rapidocr==3.9.2      # 内置 PP-OCRv6 ONNX 模型，识别时无须下载
+onnxruntime>=1.23,<2
 
 # --- 网络请求（search_web 工具）---
 requests>=2.31

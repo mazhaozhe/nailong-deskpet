@@ -24,6 +24,7 @@ class PetController {
       }
     });
     if (shell) shell.onCursor((point) => this.cursor(point));
+    else canvas.addEventListener('click', () => activate());
   }
 
   async load() {
@@ -82,11 +83,17 @@ class PetController {
     }
   }
 
-  switchTo(key, force = false) {
+  animationDuration(key) {
+    const animation = this.animations.get(key);
+    return animation ? animation.frames.length * 1000 / animation.fps : 0;
+  }
+
+  switchTo(key, mode = null) {
     if (['run', 'walk', 'stroll'].includes(key)) return false;
     const animation = this.animations.get(key);
     if (!animation) return false;
     this.current = animation;
+    this.playbackMode = mode;
     this.startedAt = performance.now();
     this.idleAt = this.startedAt + 30000;
     this.frameIndex = -1;
@@ -120,11 +127,15 @@ class PetController {
         return;
       }
     }
-    // 被调度层持有的动作一律按循环放帧：work/laugh/shy 这些 repeat 有限的动作
-    // 不能自己播完就定住，否则「思考中」几分钟后画面就僵在那里。
-    const index = (this.hold || animation.loop)
-      ? elapsed % count
-      : Math.min(elapsed, count * (animation.repeat || 1) - 1) % count;
+    // 调度权决定是否轮播空闲动作，播放模式单独决定当前帧如何推进。
+    let index;
+    if (this.playbackMode === 'once' || this.playbackMode === 'hold-last') {
+      index = Math.min(elapsed, count - 1);
+    } else if (this.playbackMode === 'loop' || animation.loop) {
+      index = elapsed % count;
+    } else {
+      index = Math.min(elapsed, count * (animation.repeat || 1) - 1) % count;
+    }
     if (index === this.frameIndex) return;
     this.frameIndex = index;
     const frame = animation.frames[index];

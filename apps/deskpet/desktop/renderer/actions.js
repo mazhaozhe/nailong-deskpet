@@ -37,6 +37,19 @@ const ACTIONS = Object.freeze({
 });
 
 const ACTION_KEYS = Object.freeze(Object.keys(ACTIONS));
+const INTERACTION_PRIORITY = PRIORITY.CELEBRATE + 1;
+const INTERACTIONS = Object.freeze({
+  welcome: [{ key: 'look-around' }, { key: 'wave' }],
+  sit: [{ key: 'sit', duration: 4000 }],
+  companion: [{ key: 'work' }, { key: 'sit', duration: 4000 }],
+  list_clear: [{ key: 'celebrate' }],
+  bedtime: [{ key: 'yawn' }, { key: 'sleep', hold: true }],
+  anniversary: [{ key: 'wave' }, { key: 'shy' }, { key: 'celebrate' }]
+});
+const INTERACTION_STEPS = {
+  'look-around': { anim: 'idle2' },
+  yawn: { anim: 'idle4' }
+};
 
 class ActionDirector {
   /**
@@ -75,6 +88,31 @@ class ActionDirector {
     return this.active ? this.active.key : null;
   }
 
+  canPlayInteraction({ replace = false } = {}) {
+    return this.active.interaction ? replace : this.active.priority < INTERACTION_PRIORITY;
+  }
+
+  playInteraction(kind, { text = '', alsoListClear = false, replace = false } = {}) {
+    if (!Object.hasOwn(INTERACTIONS, kind) || !this.canPlayInteraction({ replace })) return false;
+    const stages = INTERACTIONS[kind];
+    if (stages.some(({ key }) => !this.pet?.animationDuration((ACTIONS[key] || INTERACTION_STEPS[key]).anim))) {
+      return false;
+    }
+    this.applyInteraction({ kind, text, alsoListClear, stages, index: 0 });
+    return true;
+  }
+
+  applyInteraction(interaction) {
+    const { key, hold, duration } = interaction.stages[interaction.index];
+    const action = ACTIONS[key] || INTERACTION_STEPS[key];
+    const ttl = hold ? 0 : duration ?? this.pet.animationDuration(action.anim);
+    this.apply(key, { priority: INTERACTION_PRIORITY, ttl, source: 'interaction', interaction });
+  }
+
+  wakeInteraction() {
+    return this.active.interaction?.kind === 'bedtime' && this.release('interaction') || false;
+  }
+
   /**
    * 统一入口：所有动作切换都必须经过这里，禁止各处直接调 pet.switchTo()。
    * @returns {boolean} 是否当场生效（进队或丢弃都返回 false）
@@ -86,7 +124,7 @@ class ActionDirector {
     const life = Number.isFinite(ttl) ? ttl : action.ttl;
 
     // 同一个动作重复请求：只续期，不重置帧（重置帧 = 视觉抖动）
-    if (this.active && this.active.key === key) {
+    if (this.active && this.active.key === key && !this.active.interaction) {
       this.active.expiresAt = life > 0 ? this.now() + life : 0;
       this.active.source = source;
       return true;
@@ -135,6 +173,11 @@ class ActionDirector {
     const at = Number.isFinite(now) ? now : this.now();
     if (!this.active || !this.active.expiresAt) return false;
     if (at < this.active.expiresAt) return false;
+    const interaction = this.active.interaction;
+    if (interaction && interaction.index + 1 < interaction.stages.length) {
+      this.applyInteraction({ ...interaction, index: interaction.index + 1 });
+      return true;
+    }
     this.active = null;
     this.settle();
     return true;
@@ -151,24 +194,29 @@ class ActionDirector {
     this.apply('idle', { priority: PRIORITY.IDLE, ttl: 0, source: 'idle' });
   }
 
-  apply(key, { priority, ttl, source }) {
-    const action = ACTIONS[key];
+  apply(key, { priority, ttl, source, interaction = null }) {
+    const action = ACTIONS[key] || INTERACTION_STEPS[key];
     const expiresAt = ttl > 0 ? this.now() + ttl : 0;
-    this.active = { key, priority, source, expiresAt };
+    this.active = { key, priority, source, expiresAt, interaction };
     this.history.push({ key, priority, source, at: Math.round(this.now()) });
     if (this.history.length > 20) this.history.shift();
     if (this.pet) {
       // hold=true：由调度层决定何时结束，pet.js 不要自作主张回 idle / 轮播 idle
       if (typeof this.pet.setHold === 'function') this.pet.setHold(key !== 'idle');
-      this.pet.switchTo(action.anim, true);
+      const mode = interaction
+        ? (interaction.stages[interaction.index].hold ? 'hold-last' : 'once')
+        : (key === 'idle' ? null : 'loop');
+      this.pet.switchTo(action.anim, mode);
     }
     if (this.scene) {
       this.scene.dataset.action = key;
       this.scene.dataset.priority = String(priority);
       if (action.pose) this.scene.dataset.pose = action.pose;
       else delete this.scene.dataset.pose;
+      if (interaction) this.scene.dataset.interaction = interaction.kind;
+      else delete this.scene.dataset.interaction;
     }
-    if (typeof this.onChange === 'function') this.onChange(key, action);
+    if (typeof this.onChange === 'function') this.onChange(key, action, interaction);
   }
 }
 

@@ -2,9 +2,7 @@
 
 P0-1 下载链路：200 + docx content-type + bytes>0；穿越/非白名单名 404
 P0-2 deadline 落库：贴「11/8 23:59 前提交博客」→ 待办 deadline 精确；
-     模拟第 9 天 → 补报 overdue 出现该项
-P0-3 模拟态按用户隔离：A 模拟 30 天不影响 B；A 清除后回真实；
-     SQLite first_seen 不变
+     真实时钟超过截止时间后，补报 overdue 出现该项
 （P0-4 在 test_deskpet_no_model.py，P0-5 由其 apps.agent.tools.coding 断言覆盖）
 
 Step 0-1 陈旧 hint：带日期 parse → 无日期 parse → confirm 不带 override
@@ -16,7 +14,7 @@ Step 0-2 静态根旁路：真实 create_app() 下 /static/exports/* 必须 404�
 
 import re
 import uuid as uuid_mod
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -58,6 +56,26 @@ def _cleanup(url: str) -> None:
 # ===========================================================================
 # P0-1 导出下载链路
 # ===========================================================================
+def test_checklist_confirmation_retry_creates_todos_once(client):
+    payload = {
+        "confirmation_id": _uid(),
+        "items": [
+            {"text": "提交冲刺总结", "category": "deliverable", "matched": False},
+            {"text": "准备好截图", "category": "deliverable", "matched": True},
+        ],
+    }
+    first = client.post("/api/notice/confirm", json=payload)
+    retry = client.post("/api/notice/confirm", json=payload)
+    assert first.status_code == retry.status_code == 200
+    assert [todo["title"] for todo in first.json()["created"]] == ["提交冲刺总结"]
+    assert retry.json() == first.json()
+    assert client.get("/api/todos").json()["data"] == first.json()["created"]
+
+    second = client.post("/api/notice/confirm", json={**payload, "confirmation_id": _uid()})
+    assert second.status_code == 200
+    assert second.json()["created"][0]["id"] != first.json()["created"][0]["id"]
+
+
 def test_p0_1_download_returns_docx(client):
     r = client.post("/api/todos", json={"title": "导出这条", "source": "manual"})
     assert r.status_code == 200
@@ -119,70 +137,21 @@ def test_p0_2_deadline_hint_lands_on_todo(client):
     assert "2026-11-08T23:59" in r.json()["created"][0]["deadline"]
 
 
-def test_p0_2_deadline_drives_overdue_after_simulate(client):
-    # 今天建「11/8 23:59 交博客」，模拟跳到第 9 天（>11/8）→ 必须逾期
-    r = client.post("/api/notice/parse", json={
-        "notice_text": "11/8 23:59 前提交博客", "use_v4_pro": False})
-    hint = r.json()["data"]["deadline_hint"]
+def test_p0_2_deadline_drives_overdue_on_real_clock(client, monkeypatch):
+    from apps.deskpet.backend import clock
+
+    today = clock.real_now()
+    deadline = today + timedelta(days=2)
     r = client.post("/api/notice/confirm", json={
-        "items": [{"text": "提交博客", "category": "deliverable",
-                   "matched": False}],
-        "deadline_override": hint})
+        "items": [{"text": "提交博客", "category": "deliverable", "matched": False}],
+        "deadline_override": deadline.isoformat()})
     assert r.status_code == 200
-    tid = r.json()["created"][0]["id"]
+    assert client.get("/api/catchup").json()["data"]["overdue"] == []
 
-    r = client.post("/api/growth/simulate", json={"target_day": 9})
-    assert r.status_code == 200
-    r = client.get("/api/catchup")
-    assert r.status_code == 200
-    snap = r.json()["data"]
-    overdue_titles = [t["title"] for t in snap["overdue"]]
-    assert "提交博客" in overdue_titles, (
-        f"模拟第 9 天后补报 overdue 应含「提交博客」，"
-        f"got overdue={overdue_titles}, due_soon={snap['due_soon']}, "
-        f"pending={snap['pending']}")
-
-    # 清模拟后回真实：不再逾期（11/8 还没到）
-    client.post("/api/growth/simulate/clear")
-    snap = client.get("/api/catchup").json()["data"]
-    assert "提交博客" not in [t["title"] for t in snap["overdue"]]
-
-
-# ===========================================================================
-# P0-3 模拟态按用户隔离 + 刷新回落
-# ===========================================================================
-def test_p0_3_simulation_isolated_per_user(client):
-    # A 模拟第 30 天
-    ra = client.post("/api/growth/simulate", json={"target_day": 30})
-    assert ra.status_code == 200
-    days_a = ra.json()["data"]["days_known"]
-    assert days_a == 30, f"A 模拟后应 30 天，got {days_a}"
-    first_seen_a = ra.json()["data"]["first_seen"]
-
-    # B（新 user_id）同期必须仍是真实天数，不受 A 影响
-    rb = TestClient(client.app, headers={"X-User-Id": _uid()})
-    days_b = rb.get("/api/growth").json()["data"]["days_known"]
-    assert days_b < 2, f"B 不应被 A 的模拟波及，got {days_b} 天"
-
-    # A 显式清除 → 回真实天数，first_seen 不变
-    rc = client.post("/api/growth/simulate/clear")
-    assert rc.status_code == 200
-    after = rc.json()["data"]
-    assert after["days_known"] == days_b, (
-        f"A 清除后应回真实天数({days_b})，got {after['days_known']}")
-    assert after["first_seen"] == first_seen_a, "first_seen 不得被模拟改写"
-
-    # 持久层复核：SQLite 里的 first_seen 与清除前一致
-    import apps.deskpet.backend.storage as storage
-    uid_a = None
-    # 从 growth 表反查不出 uid 的话直接用 API 的 header uid
-    # ——用更直接的办法：再 simulate 一次确认可重复设置/清除
-    client.post("/api/growth/simulate", json={"target_day": 100})
-    d100 = client.get("/api/growth").json()["data"]["days_known"]
-    assert d100 == 100
-    client.post("/api/growth/simulate/clear")
-    d_real = client.get("/api/growth").json()["data"]["days_known"]
-    assert d_real == days_b, "第二次清除后仍必须回真实天数"
+    monkeypatch.setattr(clock, "real_now", lambda: deadline + timedelta(days=1))
+    catchup = client.get("/api/catchup").json()["data"]
+    assert [t["title"] for t in catchup["overdue"]] == ["提交博客"]
+    assert catchup["days_since_first"] == 4
 
 
 # ===========================================================================

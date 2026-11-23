@@ -29,6 +29,7 @@ async function runDragWindowTest() {
   const electron = require('electron');
   electron.shell.openExternal = (url) => { opened.push(String(url)); };
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let exitCode = 0;
   try {
     for (let wait = 0; wait < 100; wait++) {
       const ready = await mainWindow.webContents.executeJavaScript(
@@ -297,13 +298,139 @@ async function runDragWindowTest() {
     assert.deepEqual(opened, ['https://github.com/electron/electron'],
       '拟人演出过程中打开了外部链接');
 
+    mainWindow.webContents.send('pet:command', { type: 'interaction' });
+    const growthUi = await mainWindow.webContents.executeJavaScript(
+      '(async () => {'
+      + 'const $ = (s) => document.querySelector(s);'
+      + 'const until = async (predicate) => {'
+      + '  for (let i = 0; i < 70 && !predicate(); i++) await new Promise((r) => setTimeout(r, 50));'
+      + '};'
+      + 'const scene = $("#petScene");'
+      + 'await until(() => $("#interactionView")?.classList.contains("active"));'
+      + 'const available = [...document.querySelectorAll("[data-growth-action]:not(:disabled)")].map((button) => button.dataset.growthAction);'
+      + 'const before = $("#growthScore")?.textContent;'
+      + 'const dates = { panel: $("#panelDays").textContent, bubble: $("#daysBadge").textContent };'
+      + 'const previewVisible = Boolean($("[data-simulate], #clearSimulation, .growth-preview"));'
+      + 'const start = window.__reqs.length;'
+      + '$("[data-growth-action=sit]")?.click();'
+      + 'const replay = { action: scene.dataset.interaction, requests: window.__reqs.slice(start) };'
+      + 'return { active: $("#interactionView")?.classList.contains("active"), available, before, dates, previewVisible, replay };'
+      + '})()');
+    assert.equal(growthUi.active, true, '原生互动入口没打开成长动作');
+    assert.deepEqual(growthUi.available, ['welcome', 'sit', 'companion']);
+    assert.match(growthUi.before, /76\.00/);
+    assert.deepEqual(growthUi.dates, { panel: '认识你的第 1 天', bubble: '认识你的第 1 天' });
+    assert.equal(growthUi.previewVisible, false);
+    assert.deepEqual(growthUi.replay, { action: 'sit', requests: [] });
+
+    // 已解锁的成长快照足以测试原生点醒，不必在窗口里积攒多日亲密度。
+    await mainWindow.webContents.executeJavaScript(
+      '(() => {'
+      + 'const fetchSnapshot = window.fetch.bind(window);'
+      + 'window.fetch = async (input, init) => {'
+      + '  const response = await fetchSnapshot(input, init);'
+      + '  if (input !== "/api/growth/sync" || !response.ok) return response;'
+      + '  const { data } = await response.json();'
+      + '  return Response.json({ data: { ...data, intimacy: 95, unlocked_tiers: [40, 60, 75, 85, 95] } });'
+      + '};'
+      + '})()');
+    mainWindow.webContents.send('pet:command', { type: 'growth-refresh' });
+    const asleep = await mainWindow.webContents.executeJavaScript(
+      '(async () => {'
+      + 'const bedtime = document.querySelector("[data-growth-action=bedtime]");'
+      + 'const scene = document.querySelector("#petScene");'
+      + 'const pause = (ms) => new Promise((r) => setTimeout(r, ms));'
+      + 'for (let i = 0; i < 60 && bedtime.disabled; i++) await pause(50);'
+      + 'bedtime.click();'
+      + 'const start = scene.dataset.action;'
+      + 'document.querySelector("#closePanel").click();'
+      + 'for (let i = 0; i < 80 && scene.dataset.action !== "sleep"; i++) await pause(50);'
+      + 'return { start, end: scene.dataset.action, hidden: document.querySelector("#panel").hidden };'
+      + '})()');
+    assert.deepEqual(asleep, { start: 'yawn', end: 'sleep', hidden: true });
+    mainWindow.webContents.send('pet:command', { type: 'pet-activate' });
+    await sleep(120);
+    assert.equal(await mainWindow.webContents.executeJavaScript(
+      'document.querySelector("#petScene").dataset.interaction === undefined && document.querySelector("#panel").hidden'), true);
+
+    log('GROWTH_UI_TEST pass=true');
+
+    const notice = await mainWindow.webContents.executeJavaScript('(' + async function () {
+      const get = (id) => document.getElementById(id);
+      const waitFor = async (predicate) => {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if (predicate()) return;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(get('parseStatus').textContent || '等待通知拆解超时');
+      };
+      const headers = {
+        'X-User-Id': localStorage.getItem('deskpet_uid'),
+        'Content-Type': 'application/json'
+      };
+      const api = async (pathname, body) => {
+        const response = await fetch('/api' + pathname, body === undefined
+          ? { headers }
+          : { headers, method: 'POST', body: JSON.stringify(body) });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      };
+      const fileInput = get('noticeFile');
+      if (!fileInput) throw new Error('通知页缺少文件选择入口');
+      const select = (filename, contents) => {
+        const selection = new DataTransfer();
+        selection.items.add(new File([contents], filename, { type: 'text/plain' }));
+        fileInput.files = selection.files;
+        fileInput.dispatchEvent(new Event('change'));
+      };
+      document.querySelector('[data-view="notice"]').click();
+      await api('/settings/model-switch', { state: 'off' });
+      const before = (await api('/todos')).data.length;
+      select('实验报告通知.txt', '请上传实验报告。');
+      get('parseNotice').click();
+      await waitFor(() => !get('parseNotice').disabled);
+      const ordinary = get('parseStatus').textContent;
+      const hasSource = Boolean(document.querySelector('#checklist .check-source')?.textContent);
+      const item = get('checklist').textContent;
+      const beforeConfirm = (await api('/todos')).data.length;
+      get('confirmChecklist').click();
+      await waitFor(() => get('confirmChecklist').textContent === '清单已确认');
+      const afterConfirm = (await api('/todos')).data.length;
+
+      document.querySelector('[data-view="notice"]').click();
+      const toggle = get('noticeAgentMode');
+      toggle.click();
+      await waitFor(() => get('agentMode').checked && !toggle.disabled);
+      select('答辩通知.txt', '请上传答辩幻灯片。');
+      get('parseNotice').click();
+      await waitFor(() => !get('parseNotice').disabled);
+      return { ordinary, hasSource, item, before, beforeConfirm, afterConfirm,
+        documentStatus: get('parseStatus').textContent,
+        documentItem: get('checklist').textContent };
+    } + ')()');
+    assert.match(notice.ordinary, /普通模式.*规则/);
+    assert.match(notice.item, /实验报告/);
+    assert.equal(notice.hasSource, true);
+    assert.equal(notice.beforeConfirm, notice.before);
+    assert.ok(notice.afterConfirm > notice.before);
+    assert.match(notice.documentStatus, /Agent.*规则/);
+    assert.match(notice.documentItem, /答辩幻灯片/);
+    log('NOTICE_FILE_UI_TEST pass=true');
+
     log('LIFT_TEST ' + JSON.stringify({ actionKeys: state.actions.length, lifted, landed }));
     log('NATIVE_DRAG_SETUP_TEST pass=true region=drag customMovement=false panelCommand=true bubbleButtonRemoved=true');
   } catch (error) {
     log('NATIVE_DRAG_SETUP_TEST pass=false ' + error.message);
+    exitCode = 1;
   } finally {
     isQuitting = true;
-    app.quit();
+    if (exitCode) {
+      if (disposeNativeClick) disposeNativeClick();
+      await stopBackend();
+      app.exit(exitCode);
+    } else {
+      app.quit();
+    }
   }
 }
 `, entry);

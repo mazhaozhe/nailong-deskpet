@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain, safeStorage, screen, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, ipcMain, safeStorage, screen, shell, dialog, powerMonitor } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -6,6 +6,7 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 const { installNativeClick } = require('./native-click');
+const { findInstalledAt } = require('./installation');
 // 打开外链的白名单只维护在 renderer/intents.js 一处：
 // 渲染层先用它判意图，主进程再用它兜底校验（页面被改也绕不过去）。
 const { isAllowedExternalUrl } = require('./renderer/intents.js');
@@ -36,6 +37,7 @@ let tray = null;
 let backend = null;
 let apiPort = 0;
 let currentUserId = '';
+let installedAt = null;
 let isQuitting = false;
 let mouseIgnored = true;
 let cursorTimer = null;
@@ -46,6 +48,11 @@ let backendGeneration = 0;
 let restartChain = Promise.resolve();
 let runtimeLog = '';
 const notifiedTodos = new Set();
+
+// Windows 启动进程先退出时，日志管道可能已关闭。桌宠仍应正常运行或退出。
+process.stdout.on('error', (error) => {
+  if (error.code !== 'EPIPE') throw error;
+});
 
 if (SMOKE_TEST) {
   app.setPath('userData', path.join(app.getPath('temp'), `deskpet-stage5-${process.pid}`));
@@ -256,6 +263,8 @@ async function startBackend() {
   // PYTHONPATH 由我们自己设，其余一律不带。
   delete inherited.PYTHONHOME;
   delete inherited.PYTHONSTARTUP;
+  delete inherited.DESKPET_LOCAL_UID;
+  delete inherited.DESKPET_INSTALLED_AT;
   delete inherited.PYTHONEXECUTABLE;
   const child = spawn(PYTHON, [
     '-m', 'uvicorn', 'apps.deskpet.backend.app:app',
@@ -267,6 +276,7 @@ async function startBackend() {
       DEEPSEEK_API_KEY: apiKey,
       DESKPET_ACCESS_TOKEN: '',
       DESKPET_DATA_DIR: dataDir,
+      ...(installedAt ? { DESKPET_LOCAL_UID: currentUserId, DESKPET_INSTALLED_AT: installedAt } : {}),
       PYTHONPATH: ROOT,
       PYTHONUNBUFFERED: '1',
       PYTHONIOENCODING: 'utf-8',
@@ -401,7 +411,9 @@ function createWindow() {
   if (process.platform === 'win32') {
     // 第 5 个参数 = native_mouse.py 的真实路径：打包态在 asar 外（Python 读不到 asar），
     // 且监听进程必须用同一个包内解释器，挂掉会丢拖拽 / 抬起动作。
-    disposeNativeClick = installNativeClick(mainWindow, screen, () => mainWindow.webContents.send('pet:command', 'open'), PYTHON, MOUSE_SCRIPT);
+    disposeNativeClick = installNativeClick(mainWindow, screen, () => {
+      mainWindow.webContents.send('pet:command', { type: 'pet-activate' });
+    }, PYTHON, MOUSE_SCRIPT);
   }
   mainWindow.setAlwaysOnTop(saved.alwaysOnTop !== false, 'floating');
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -539,6 +551,7 @@ function showPetMenu() {
   const settings = publicDesktopSettings();
   Menu.buildFromTemplate([
     { label: '打开清单', click: () => mainWindow.webContents.send('pet:command', 'open') },
+    { label: '互动', click: () => mainWindow.webContents.send('pet:command', { type: 'interaction' }) },
     { label: settings.alwaysOnTop ? '取消置顶' : '置顶', click: () => {
       const next = updateDesktopSettings({ alwaysOnTop: !settings.alwaysOnTop });
       mainWindow.setAlwaysOnTop(next.alwaysOnTop, 'floating');
@@ -623,13 +636,12 @@ async function runSmokeTest() {
       for (let i = 0; i < 80 && !$$('#todoList .todo-item').length; i += 1) await wait(100);
       $('#exportDocx').click();
       for (let i = 0; i < 80 && !$('#exportResult a'); i += 1) await wait(100);
-      $('[data-simulate="30"]').click();
-      await wait(400);
-      const simulated = $('#daysBadge').textContent;
+      const actualDays = $('#daysBadge').textContent;
+      const noDatePreview = !$('[data-simulate], #clearSimulation');
       return { initial, opened, sampleOnlyFills, parsed,
         todosAfterConfirm: $$('#todoList .todo-item').length,
         exportReady: Boolean($('#exportResult a')),
-        simulated,
+        actualDays, noDatePreview,
         // 会话 5：小游戏下架，这里顺手记下「动作调度层在线」的证据
         actionKeys: Object.keys(window.ActionDirector.ACTIONS).length,
         actionNow: document.querySelector('#petScene').dataset.action,
@@ -682,8 +694,8 @@ async function runSmokeTest() {
       ui.initial.panelCollapsed && ui.initial.keyPromptHidden && ui.initial.todoCount === 0 &&
       ui.initial.animations === 13 && ui.initial.uniqueFrames === 74 && ui.initial.canvasVisible &&
       ui.opened && ui.sampleOnlyFills && ui.parsed.decisionStates >= 4 && ui.parsed.checklistItems > 0 &&
-      ui.parsed.degraded && ui.parsed.degradedText.includes('规则版，未调模型') && ui.parsed.keyPromptAfterParse &&
-      ui.todosAfterConfirm > 0 && ui.exportReady && ui.simulated.includes('30') &&
+      ui.parsed.degraded && ui.parsed.degradedText.includes('规则版') && ui.parsed.keyPromptAfterParse &&
+      ui.todosAfterConfirm > 0 && ui.exportReady && ui.actualDays.includes('第 1 天') && ui.noDatePreview &&
       ui.actionKeys >= 8 && ui.modelCalls === 0 && evidence.refreshRealDays.includes('第 1 天') &&
       evidence.refreshCollapsed && evidence.noKeyStatus.configured === false && evidence.dynamicPort &&
       evidence.keyDialog && evidence.keyDialog.opened && evidence.keyDialog.submitted === SMOKE_DIALOG_KEY &&
@@ -708,9 +720,15 @@ app.whenReady().then(async () => {
   PYTHON = resolvePython();
   log(`[startup] runtime=${JSON.stringify({ packaged: IS_PACKAGED, root: ROOT, python: PYTHON })}`);
   ensureUserIdentity();
+  installedAt = findInstalledAt({ isPackaged: IS_PACKAGED, smokeTest: SMOKE_TEST, python: PYTHON });
   await startBackend();
   createTray();
   createWindow();
+  powerMonitor.on('resume', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('pet:command', { type: 'growth-refresh' });
+    }
+  });
   ipcMain.handle('runtime:get', () => ({ host: '127.0.0.1', port: apiPort }));
   ipcMain.handle('desktop:settings:get', () => publicDesktopSettings());
   ipcMain.on('user:identity', (_event, uid) => {

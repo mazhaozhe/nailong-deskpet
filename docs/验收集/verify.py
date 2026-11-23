@@ -77,7 +77,6 @@ def main():
         A, B = str(uuid.uuid4()), str(uuid.uuid4())
         ca = TestClient(app, headers={"X-User-Id": A})
         cb = TestClient(app, headers={"X-User-Id": B})
-        ca.post("/api/growth/simulate/clear")
 
         # --- Step 0-1 陈旧 hint / 正向链路 / 跨用户 ---
         ca.post("/api/notice/parse", json={
@@ -104,14 +103,19 @@ def main():
         chk("forward_deadline_exact", dl == "2026-11-08T23:59:00+08:00", dl)
         tid = created[0]["id"] if created else None
 
-        ca.post("/api/growth/simulate", json={"target_day": 9})
-        overdue = [t["title"] for t in ca.get("/api/catchup").json()["data"]["overdue"]]
+        from unittest.mock import patch
+        from datetime import datetime, timedelta
+        if dl:
+            after_deadline = datetime.fromisoformat(dl) + timedelta(days=1)
+            with patch("apps.deskpet.backend.clock.real_now", return_value=after_deadline):
+                overdue = [t["title"] for t in ca.get("/api/catchup").json()["data"]["overdue"]]
+        else:
+            overdue = []
         chk("overdue_named", "提交博客" in overdue, overdue)
-        ca.post("/api/growth/simulate/clear")
 
         cb.post("/api/notice/confirm", json={
             "items": [{"text": "B的清单", "category": "deliverable", "matched": False}]})
-        chk("cross_user_clean", cb.get("/api/growth").json()["data"]["days_known"] == 0)
+        chk("cross_user_clean", cb.get("/api/growth").json()["data"]["days_known"] == 1)
 
         # --- Step 0-2 导出链路 ---
         if tid:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -37,19 +38,12 @@ class GrowthResponse(BaseModel):
     data: GrowthState
 
 
-class SimulateDaysRequest(BaseModel):
-    """模拟第 N 天（按钮/滑杆跳 7/30/100 天）。
-
-    只临时覆盖展示用的「当前日期」，不写脏真实数据。
-    前端渲染记忆条数、语气变化与形象阶段。
-    """
-    target_day: int = Field(..., ge=1, le=1000, description="跳到第几天")
-    # 后端据此推算 simulated_now = first_seen + target_day 天，回填 GrowthState
+class GrowthSyncRequest(BaseModel):
+    panel_open: bool = False
 
 
-class SimulateDaysResponse(BaseModel):
-    data: GrowthState
-    note: str = Field("", description="说明这是模拟展示，非真实数据")
+class GrowthActionClaimResponse(BaseModel):
+    claimed: bool
 
 
 # ===========================================================================
@@ -67,7 +61,7 @@ class TodoUpdate(BaseModel):
     deadline: Optional[datetime] = None
     gap: Optional[str] = None
     status: Optional[TodoStatus] = None  # 用枚举收紧，拒绝任意字符串
-    # 勾选完成时后端自动写 done_at 并触发亲密度 +1
+    # 首次勾选完成时由后端在同一事务内结算亲密度。
 
 
 class TodoListResponse(BaseModel):
@@ -76,6 +70,10 @@ class TodoListResponse(BaseModel):
 
 class TodoResponse(BaseModel):
     data: TodoItem
+
+
+class TodoUpdateResponse(TodoResponse):
+    growth: GrowthState | None = None
 
 
 # ===========================================================================
@@ -90,6 +88,7 @@ class CatchupResponse(BaseModel):
 # ===========================================================================
 class NoticeParseRequest(BaseModel):
     notice_text: str = Field(..., min_length=1, description="贴进来的通知全文")
+    mode: Literal["standard", "agent"] = "standard"
     use_v4_pro: bool = Field(
         False,
         description="长通知复杂拆解手动开关；默认 False 走 flash，绝不默认开贵模型")
@@ -100,12 +99,15 @@ class NoticeParseResponse(BaseModel):
     degraded: bool = Field(
         False, description="是否降级（模型不可用/校验失败→规则兜底）")
     degrade_reason: str = Field("", description="降级原因（答辩可讲）")
+    mode: Literal["model", "rules", "agent"] = "model"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ChecklistConfirmRequest(BaseModel):
-    """用户确认对照卡后，把勾选的 ChecklistItem 落成 TodoItem。"""
+    """用户确认对照卡后，把未勾选的 ChecklistItem 落成 TodoItem。"""
     items: list[ChecklistItem]
     deadline_override: Optional[datetime] = None
+    confirmation_id: UUID | None = None
 
 
 class ChecklistConfirmResponse(BaseModel):
@@ -196,6 +198,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(
         None, max_length=64,
         description="前端一次会话一个 id；不传则退化成「每条都无上下文」")
+    request_id: UUID | None = None
     history: list[ChatTurn] = Field(
         default_factory=list, max_length=_MAX_HISTORY_ITEMS,
         description="可选：前端已有气泡记录，仅在该 session_id 首次出现时用于播种")
@@ -209,6 +212,7 @@ class ChatResponse(BaseModel):
     degrade_reason（前端据此标「规则版」，绝不把兜底伪装成模型回复）。
     """
     data: ChatReply
+    growth: GrowthState | None = None
     degraded: bool = False
     degrade_reason: str = ""
     source: Literal["model", "rule"] = "model"

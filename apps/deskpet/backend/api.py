@@ -1,7 +1,7 @@
 """apps.deskpet.backend.api —— 前后端接口（实现版）
 
 阶段 3：接模型层（方案 B，收敛的 ReAct）。已实现：待办 CRUD、补报、
-        导出 docx、成长、模拟，以及 notice/parse、todo/from-voice、
+        导出 docx、成长，以及 notice/parse、todo/from-voice、
         task/qa（模型可用走 LlmGateway，
         不可用一律降级规则版/静态兜底，degraded=true + 明确原因）。
 会话 3：新增 POST /chat 自由闲聊（覆盖交接卡 §2.7「不做通用问答」，依据
@@ -30,9 +30,11 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from apps.deskpet.backend import capabilities, clock, cost, settings, storage
 from apps.deskpet.backend import agent_runtime, chat_memory, chat_rules
@@ -41,6 +43,7 @@ from apps.deskpet.backend.growth import build_catchup
 from apps.deskpet.backend.llm import gateway
 from apps.deskpet.backend.models import (
     ChatReply,
+    GrowthState,
     NoticeParseResult,
     TaskQAAnswer,
     TodoStatus,
@@ -60,22 +63,25 @@ from apps.deskpet.backend.schemas import (
     ChecklistConfirmResponse,
     ExportDocxRequest,
     ExportDocxResponse,
+    GrowthActionClaimResponse,
     GrowthResponse,
+    GrowthSyncRequest,
     ModelSwitchRequest,
     NoticeParseRequest,
     NoticeParseResponse,
-    SimulateDaysRequest,
-    SimulateDaysResponse,
     TaskQARequest,
     TodoCreate,
     TodoListResponse,
     TodoResponse,
     TodoUpdate,
+    TodoUpdateResponse,
     VoiceTodoRequest,
     VoiceTodoResponse,
 )
 
 router = APIRouter(prefix="/api", tags=["deskpet"])
+
+_MAX_NOTICE_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 def _uid(request: Request) -> str:
@@ -94,36 +100,16 @@ async def get_growth(request: Request,
     return GrowthResponse(data=g)
 
 
-@router.post("/growth/simulate", response_model=SimulateDaysResponse)
-async def simulate_days(req: SimulateDaysRequest, request: Request,
-                        conn=Depends(get_conn)) -> SimulateDaysResponse:
-    """模拟第 N 天。只临时覆盖 clock.now() 返回值，不写脏真实数据。
-
-    P0-3：模拟值按 user_id 存（clock._simulated 字典），A 模拟不影响 B；
-    任何写库（create/update）走 clock.real_now() 绕开模拟；
-    清除走 /growth/simulate/clear（前端页面加载时调一次 = 刷新回真实）。
-    """
-    uid_ = _uid(request)
-    first_seen, _ = storage.get_or_create_user(conn, uid_)
-    clock.set_simulated_now(req.target_day, first_seen, uid_)
-    g = storage.get_growth(conn, uid_)
-    return SimulateDaysResponse(
-        data=g,
-        note=f"模拟展示第 {req.target_day} 天，非真实数据；"
-             f"清除后回真实天数（POST /growth/simulate/clear）")
+@router.post("/growth/sync", response_model=GrowthResponse)
+async def sync_growth(req: GrowthSyncRequest, request: Request,
+                      conn=Depends(get_conn)) -> GrowthResponse:
+    return GrowthResponse(data=storage.sync_growth(conn, _uid(request), panel_open=req.panel_open))
 
 
-@router.post("/growth/simulate/clear", response_model=GrowthResponse)
-async def clear_simulation(request: Request,
-                           conn=Depends(get_conn)) -> GrowthResponse:
-    """显式清除本用户的模拟态，回到真实天数。
-
-    前端在页面加载时调用一次（等效刷新回真实）；模拟按钮旁的
-    「回到真实」也调它。SQLite 里 first_seen 不受任何影响。
-    """
-    uid_ = _uid(request)
-    clock.clear_simulation(uid_)
-    return GrowthResponse(data=storage.get_growth(conn, uid_))
+@router.post("/growth/actions/{event_id}/claim", response_model=GrowthActionClaimResponse)
+async def claim_growth_action(event_id: str, request: Request,
+                              conn=Depends(get_conn)) -> GrowthActionClaimResponse:
+    return GrowthActionClaimResponse(claimed=storage.claim_growth_action(conn, _uid(request), event_id))
 
 
 # ===========================================================================
@@ -145,17 +131,18 @@ async def create_todo(req: TodoCreate, request: Request,
     return TodoResponse(data=item)
 
 
-@router.patch("/todos/{todo_id}", response_model=TodoResponse)
+@router.patch("/todos/{todo_id}", response_model=TodoUpdateResponse)
 async def update_todo(todo_id: str, req: TodoUpdate, request: Request,
-                      conn=Depends(get_conn)) -> TodoResponse:
+                      conn=Depends(get_conn)) -> TodoUpdateResponse:
+    uid_ = _uid(request)
     fields = req.model_dump(exclude_unset=True)
     # status 字符串 → 枚举
     if "status" in fields and isinstance(fields["status"], str):
         fields["status"] = TodoStatus(fields["status"])
-    item = storage.update_todo(conn, _uid(request), todo_id, **fields)
+    item = storage.update_todo(conn, uid_, todo_id, **fields)
     if not item:
         raise HTTPException(404, "待办不存在")
-    return TodoResponse(data=item)
+    return TodoUpdateResponse(data=item, growth=storage.get_growth(conn, uid_))
 
 
 @router.delete("/todos/{todo_id}")
@@ -176,7 +163,10 @@ async def get_catchup(request: Request,
     uid_ = _uid(request)
     todos = storage.list_todos(conn, uid_)
     g = storage.get_growth(conn, uid_)
-    snap = build_catchup(user_id=uid_, days_known=g.days_known, todos=todos)
+    snap = build_catchup(
+        user_id=uid_, days_known=g.days_known, todos=todos,
+        now=g.as_of,
+    )
     return CatchupResponse(data=snap)
 
 
@@ -205,6 +195,12 @@ async def parse_notice(req: NoticeParseRequest,
     deadline 仍走前端单通道（Step 0-1 口径不变）。
     """
     from apps.deskpet.backend.notice_rules import parse_notice_by_rules
+
+    if req.mode == "agent":
+        from apps.deskpet.backend.notice_document_service import review_pasted_notice
+
+        return await review_pasted_notice(req.notice_text, agent_enabled=agent_runtime.AgentRuntime.get_mode())
+
     out = await gateway.invoke(
         schema=NoticeParseResult,
         messages=notice_to_checklist.build_messages(
@@ -212,34 +208,53 @@ async def parse_notice(req: NoticeParseRequest,
         route="notice/parse", capability="parse_notice",
         prefer_manual=req.use_v4_pro)
     if out.data is not None:
-        return NoticeParseResponse(data=out.data, degraded=False)
+        return NoticeParseResponse(data=out.data, mode="model", degraded=out.degraded,
+                                   degrade_reason=out.degrade_reason)
     return NoticeParseResponse(
         data=parse_notice_by_rules(req.notice_text),
-        degraded=True, degrade_reason=out.degrade_reason)
+        mode="rules", degraded=True, degrade_reason=out.degrade_reason)
+
+
+@router.post("/notice/document")
+async def parse_notice_document(request: Request, filename: str = Query(min_length=1, max_length=255),
+                                mode: Literal["standard", "agent"] = "standard") -> StreamingResponse:
+    from apps.deskpet.backend.notice_document_service import document_events
+    from apps.deskpet.backend.notice_documents import DOCUMENT_SUFFIXES
+
+    if Path(filename).suffix.lower() not in DOCUMENT_SUFFIXES:
+        raise HTTPException(415, "仅支持 PDF、DOCX 和 TXT 文件。")
+
+    file = tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024, mode="w+b")
+    try:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _MAX_NOTICE_UPLOAD_BYTES:
+                raise HTTPException(413, "文件超过 50 MB，请缩小文件后重试。")
+            file.write(chunk)
+        if not size:
+            raise HTTPException(400, "文件是空的。")
+        enabled = mode == "agent" and agent_runtime.AgentRuntime.get_mode()
+        return StreamingResponse(document_events(file, filename, mode, agent_enabled=enabled),
+                                 media_type="application/x-ndjson", background=BackgroundTask(file.close))
+    except BaseException:
+        file.close()
+        raise
 
 
 @router.post("/notice/confirm", response_model=ChecklistConfirmResponse)
 async def confirm_checklist(req: ChecklistConfirmRequest, request: Request,
                             conn=Depends(get_conn)) -> ChecklistConfirmResponse:
-    """用户对照卡确认后，把勾选项落成 TodoItem。不用模型。
+    """用户对照卡确认后，把未勾选项落成 TodoItem。不用模型。
 
-    deadline 唯一来源（Step 0-1）：req.deadline_override ——
-    前端把 parse 抽出的 deadline_hint 存 window._deadlineHint 后显式回传。
-    不传 override 一律落 null（无日期通知不串上一条的截止时间）。
-    落库前统一走 clock.to_iso() 补时区（storage.create_todo 内完成），
-    naive datetime 不会污染时区口径。
+    粘贴通知沿用整份通知的日期，文档对照卡可逐条回传日期。
     """
-    uid_ = _uid(request)
-    deadline = req.deadline_override
-    created = []
-    for item in req.items:
-        if item.matched:
-            continue  # 已勾完成的不重复落
-        todo = storage.create_todo(
-            conn, uid_, title=item.text,
-            deadline=deadline, gap=item.text,
-            source="notice")
-        created.append(todo)
+    created = storage.create_notice_todos(
+        conn, _uid(request),
+        items=[(item.text, req.deadline_override or item.deadline_hint)
+               for item in req.items if not item.matched],
+        confirmation_id=str(req.confirmation_id) if req.confirmation_id is not None else None,
+    )
     return ChecklistConfirmResponse(created=created)
 
 
@@ -302,6 +317,21 @@ async def task_qa(req: TaskQARequest, request: Request,
 # ===========================================================================
 # 自由闲聊（会话 3：单次结构化调用 + 记忆型智慧层）
 # ===========================================================================
+def _validate_chat_receipt(conn, user_id: str, text: str, request_id: str | None) -> None:
+    try:
+        storage.validate_chat_request(conn, user_id, text, request_id)
+    except storage.ChatRequestConflict as exc:
+        raise HTTPException(409, "聊天请求编号已用于另一条消息") from exc
+
+
+def _record_chat_reply(conn, user_id: str, text: str | None, request_id: str | None,
+                       *, digest: str | None = None) -> GrowthState:
+    try:
+        return storage.record_chat_reply(conn, user_id, text, request_id, digest=digest)
+    except storage.ChatRequestConflict as exc:
+        raise HTTPException(409, "聊天请求编号已用于另一条消息") from exc
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request,
                conn=Depends(get_conn)) -> ChatResponse:
@@ -329,6 +359,9 @@ async def chat(req: ChatRequest, request: Request,
     uid_ = _uid(request)
     session_id = (req.session_id or "").strip()
     text = (req.message or "").strip()
+    request_id = str(req.request_id) if req.request_id else None
+    if text:
+        _validate_chat_receipt(conn, uid_, text, request_id)
 
     # 长期记忆（只读，按 uid 隔离；每次现读，不缓存跨用户数据）
     facts = chat_memory.collect_facts(conn, uid_)
@@ -344,39 +377,34 @@ async def chat(req: ChatRequest, request: Request,
             source="rule", source_detail="空消息：规则提示，未调用模型")
 
     if chat_rules.is_simple(text):
-        reply = chat_rules.simple_reply(text, facts)
-        chat_memory.chat_sessions.append(uid_, session_id, "user", text)
-        chat_memory.chat_sessions.append(uid_, session_id, "assistant",
-                                         reply.reply)
-        return ChatResponse(
-            data=reply, degraded=False,
+        response = ChatResponse(
+            data=chat_rules.simple_reply(text, facts), degraded=False,
             source="rule", source_detail="纯打招呼/道谢：规则回复，零模型调用")
+    else:
+        out = await gateway.invoke(
+            schema=ChatReply,
+            messages=prompt_free_chat.build_messages(
+                text,
+                memory_block=chat_memory.render_memory_block(facts),
+                history=history),
+            route="chat", capability="free_chat")
+        if out.data is not None:
+            response = ChatResponse(
+                data=out.data, degraded=out.degraded,
+                degrade_reason=out.degrade_reason, source="model",
+                source_detail=("已降级本地 ollama-local，不是云端模型"
+                               if out.degraded else ""))
+        else:
+            response = ChatResponse(
+                data=chat_rules.fallback_reply(out.degrade_reason, facts),
+                degraded=True, degrade_reason=out.degrade_reason,
+                source="rule", source_detail="模型不可用：规则兜底，页面不空白")
 
-    out = await gateway.invoke(
-        schema=ChatReply,
-        messages=prompt_free_chat.build_messages(
-            text,
-            memory_block=chat_memory.render_memory_block(facts),
-            history=history),
-        route="chat", capability="free_chat")
-
-    if out.data is not None:
-        chat_memory.chat_sessions.append(uid_, session_id, "user", text)
-        chat_memory.chat_sessions.append(uid_, session_id, "assistant",
-                                         out.data.reply)
-        return ChatResponse(
-            data=out.data, degraded=out.degraded,
-            degrade_reason=out.degrade_reason, source="model",
-            source_detail=("已降级本地 ollama-local，不是云端模型"
-                           if out.degraded else ""))
-
-    reply = chat_rules.fallback_reply(out.degrade_reason, facts)
+    if response.data.reply.strip():
+        response.growth = _record_chat_reply(conn, uid_, text, request_id)
     chat_memory.chat_sessions.append(uid_, session_id, "user", text)
-    chat_memory.chat_sessions.append(uid_, session_id, "assistant",
-                                     reply.reply)
-    return ChatResponse(
-        data=reply, degraded=True, degrade_reason=out.degrade_reason,
-        source="rule", source_detail="模型不可用：规则兜底，页面不空白")
+    chat_memory.chat_sessions.append(uid_, session_id, "assistant", response.data.reply)
+    return response
 
 
 # ===========================================================================
@@ -599,19 +627,35 @@ async def agent_mode(req: agent_runtime.AgentModeRequest) -> dict:
 
 @router.post("/agent/chat")
 async def agent_chat(req: agent_runtime.AgentChatRequest,
-                     request: Request) -> dict:
+                     request: Request, conn=Depends(get_conn)) -> dict:
     """发一句给完整 Agent。status: ok | pending_approval | degraded。"""
-    return await agent_runtime.get_runtime().chat(
-        _uid(request), req.session_id, req.message)
+    uid_ = _uid(request)
+    request_id = str(req.request_id) if req.request_id else None
+    message = req.message.strip()
+    receipt = None
+    if message:
+        _validate_chat_receipt(conn, uid_, message, request_id)
+        receipt = (storage.chat_message_digest(conn, uid_, message), request_id)
+    result = await agent_runtime.get_runtime().chat(uid_, req.session_id, req.message, receipt=receipt)
+    return _settle_agent_reply(conn, uid_, result)
 
 
 @router.post("/agent/approve")
 async def agent_approve(req: agent_runtime.AgentApproveRequest,
-                        request: Request) -> dict:
+                        request: Request, conn=Depends(get_conn)) -> dict:
     """审批决定。decisions 与 action_requests 按下标一一对应；approval_id 一次性。"""
     decisions = [d.type for d in req.decisions]
-    return await agent_runtime.get_runtime().approve(
-        _uid(request), req.approval_id, decisions)
+    uid_ = _uid(request)
+    result = await agent_runtime.get_runtime().approve(uid_, req.approval_id, decisions)
+    return _settle_agent_reply(conn, uid_, result)
+
+
+def _settle_agent_reply(conn, user_id: str, result: dict) -> dict:
+    receipt = result.pop("_growth_receipt", None)
+    if receipt is not None and result["status"] == "ok":
+        digest, request_id = receipt
+        result["growth"] = _record_chat_reply(conn, user_id, None, request_id, digest=digest)
+    return result
 
 
 @router.get("/agent/status")

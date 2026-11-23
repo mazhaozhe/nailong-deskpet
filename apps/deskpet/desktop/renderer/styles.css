@@ -49,6 +49,12 @@ body.desktop .pet-canvas {
 .agent-toggle{display:inline-flex;align-items:center;gap:4px;margin-left:auto;color:var(--muted);font-size:9px;font-weight:500;cursor:pointer;user-select:none}
 .agent-toggle input{width:13px;height:13px;margin:0;accent-color:var(--accent);cursor:pointer}
 .agent-toggle.on{color:var(--accent-dark);font-weight:700}
+.agent-toggle{flex-shrink:0}
+.notice-file{display:flex;align-items:center;gap:7px;margin-top:7px}
+.notice-file button{flex-shrink:0}
+#noticeFileName{font-size:10px;color:var(--muted);overflow-wrap:anywhere}
+#parseStatus{white-space:pre-line;overflow-wrap:anywhere}
+.check-source{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.5;overflow-wrap:anywhere}
 
 /* ==========================================================================
    会话 5：动作演出层（拟人表现）—— 只有绘制层变化，不新增任何 png 素材
@@ -131,6 +137,46 @@ body.desktop .pet-canvas {
 
 /* 待办行右侧动作区：问 + 删 */
 .todo-actions{display:flex;gap:2px;align-items:flex-start}
+
+/* 成长信息、动作入口与动作图层 */
+.growth-strip .growth-heading{align-items:center;justify-content:space-between;margin-top:0}
+.growth-heading strong{color:var(--ink)}
+.growth-heading #openInteractions{flex:none;padding:4px 10px;color:var(--accent-dark)}
+.growth-status{flex-wrap:wrap;justify-content:space-between;color:var(--muted);font-size:10px}
+#growthScore{color:var(--ink);font-weight:650;font-variant-numeric:tabular-nums}
+.growth-receipt{margin-top:8px;color:var(--muted);font-size:10px}
+.growth-receipt summary{cursor:pointer}
+.growth-receipt ul{margin:6px 0 0;padding-left:15px;max-height:90px;overflow:auto;line-height:1.6}
+.growth-actions{display:grid;gap:5px;margin:0;padding:0;list-style:none}
+.growth-actions li{display:flex;align-items:center;justify-content:space-between;gap:7px}
+.growth-actions button,.todo-item .todo-companion{padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--paper-soft);color:var(--accent-dark);font-size:10px}
+.growth-actions span{color:var(--muted);font-size:10px}
+.todo-item .todo-companion{margin-top:6px}
+.anniversary-card{display:grid;gap:5px;margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--paper-soft);color:var(--accent-dark)}
+.anniversary-card span,.anniversary-card time{color:var(--muted);font-size:10px}
+.anniversary-card strong{font-size:14px}
+.interaction-bubble,.interaction-check,.interaction-confetti{position:absolute;pointer-events:none;z-index:6}
+.interaction-bubble{right:206px;bottom:93px;max-width:min(225px,calc(100% - 219px));padding:7px 10px;border:1px solid var(--line);border-radius:12px;background:var(--paper);font-size:11px;line-height:1.45;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.interaction-check{right:55px;bottom:148px;display:grid;width:24px;height:24px;place-items:center;border-radius:50%;background:var(--green);color:var(--paper);font-size:15px;font-weight:700;animation:interaction-check .65s ease-out both}
+.interaction-confetti{right:110px;bottom:128px}
+.interaction-confetti i{position:absolute;width:5px;height:9px;border-radius:2px;background:var(--accent);animation:interaction-confetti .95s cubic-bezier(.17,.61,.42,1) both;--confetti-x:41px;--confetti-y:-48px;--confetti-angle:130deg}
+.interaction-confetti i:nth-child(2){--confetti-x:-45px;--confetti-y:-56px;--confetti-angle:-140deg;background:var(--green)}
+.interaction-confetti i:nth-child(3){--confetti-x:72px;--confetti-y:-26px;--confetti-angle:230deg;background:var(--danger)}
+.interaction-confetti i:nth-child(4){--confetti-x:-75px;--confetti-y:-28px;--confetti-angle:-220deg}
+.interaction-confetti i:nth-child(5){--confetti-x:18px;--confetti-y:-76px;--confetti-angle:90deg;background:var(--green)}
+.interaction-confetti i:nth-child(6){--confetti-x:-19px;--confetti-y:-73px;--confetti-angle:-80deg;background:var(--danger)}
+@keyframes interaction-check{0%{transform:scale(.55);opacity:0}35%{transform:scale(1.13);opacity:1}100%{transform:scale(1);opacity:1}}
+@keyframes interaction-confetti{0%{transform:none;opacity:0}20%{opacity:1}80%{opacity:1}100%{transform:translate(var(--confetti-x),var(--confetti-y)) rotate(var(--confetti-angle));opacity:0}}
+
+/* 窄窗口的面板底部给桌宠留空间，动作切换时保持位置和拖拽区域稳定。 */
+@media(max-width:520px){
+  .pet-scene .panel{bottom:160px}
+  .pet-scene:has(.panel:not([hidden])) .pet-canvas:not(.zoomed){width:128px;height:139px}
+  .pet-scene:has(.panel:not([hidden])) .interaction-bubble{right:145px;bottom:60px;max-width:min(225px,calc(100% - 159px))}
+  .pet-scene:has(.panel:not([hidden])) .interaction-check{right:48px;bottom:101px}
+  .pet-scene:has(.panel:not([hidden])) .interaction-confetti{right:78px;bottom:89px}
+}
+@media(prefers-reduced-motion:reduce){.interaction-confetti{display:none}}
 .todo-item .qa-toggle{padding:2px 7px;border:1px solid var(--line);border-radius:8px;background:var(--paper-soft);color:var(--accent-dark);font-size:9px}
 .todo-item .qa-toggle:hover{border-color:var(--accent);color:var(--accent-dark)}
 /* 展开问答时，行与问答区之间只留一条分隔线，不叠双线 */

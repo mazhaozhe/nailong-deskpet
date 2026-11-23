@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 # 待办状态（不用模型 · 本地 JSON/SQLite · 按用户隔离）
 # ===========================================================================
 class TodoStatus(str, Enum):
-    """待办状态。漏了不扣分（brief 第六节：不惩罚）。"""
+    """待办状态。"""
     PENDING = "pending"        # 待办，未完成
     DONE = "done"              # 已勾选完成
 
@@ -67,6 +67,10 @@ class ChecklistItem(BaseModel):
         description="分类：deliverable 交付物 / format 格式 / deadline 截止 / other")
     matched: bool = Field(
         False, description="前端对照卡用：用户是否已勾选对应已完成")
+    source: str | None = None
+    sources: list[str] = Field(default_factory=list)
+    needs_review: bool = False
+    deadline_hint: datetime | None = None
 
 
 # ===========================================================================
@@ -82,7 +86,7 @@ class CatchupSnapshot(BaseModel):
     user_id: str
     snapshot_at: datetime = Field(..., description="快照时间（=打开页面时刻）")
     days_since_first: int = Field(
-        ..., description="认识你的第 N 天（今天 − 首次使用日期）")
+        ..., description="认识你的第 N 天（北京时间日期差加一）")
     overdue: list[TodoItem] = Field(
         default_factory=list, description="已逾期未完成（红线，最先报）")
     due_soon: list[TodoItem] = Field(
@@ -111,26 +115,54 @@ class PersonaStage(str, Enum):
     CLOSE = "close"          # 老友（第 30 天起）
 
 
-class GrowthState(BaseModel):
-    """成长 = 记得的事越来越多，不是等级经验。
+class GrowthReason(BaseModel):
+    kind: str
+    base: float
+    delta: float
+    count: int
 
-    统一口径用「认识你的第 N 天」，禁用「第 N 天/存活天数」游戏化说法。
-    亲密度/心情只由真实行为驱动（按时完成 +1，漏了不扣，不惩罚）。
-    """
+
+class GrowthToday(BaseModel):
+    date: date
+    chat_base: float = 0
+    todo_base: float = 0
+    penalty_base: float = 0
+    gained: float = 0
+    lost: float = 0
+    reasons: list[GrowthReason] = Field(default_factory=list)
+
+
+class GrowthAnniversary(BaseModel):
+    days_known: int
+    unlocked_at: datetime
+
+
+class GrowthActionEvent(BaseModel):
+    id: str
+    kind: str
+    also_list_clear: bool = False
+
+
+class GrowthState(BaseModel):
+    """真实相识天数、亲密度、额度和永久解锁。"""
+
     user_id: str
-    first_seen: datetime = Field(..., description="首次使用日期（持久化）")
-    days_known: int = Field(..., description="认识你的第 N 天（今天 − first_seen）")
-    memory_count: int = Field(
-        ..., description="记忆条数（累积的 ddl/项目/卡点数）")
-    intimacy: int = Field(
-        0, ge=0, description="亲密度（按时完成 +1，漏了不扣）")
-    mood: int = Field(
-        100, ge=0, le=100, description="心情 0~100，仅展示用")
-    stage: PersonaStage = Field(
-        PersonaStage.NEW, description="形象阶段（由 days_known 映射，资源档）")
-    # 模拟展示用：临时覆盖「当前日期」以演示跨天成长，不写脏真实数据
-    simulated_now: Optional[datetime] = Field(
-        None, description="模拟第 N 天时临时覆盖的当前日期；None=用真实今天")
+    first_seen: datetime
+    days_known: int = Field(..., ge=1, description="相识天数，首日为第 1 天")
+    memory_count: int
+    intimacy: float = Field(75, ge=0, le=100)
+    mood: int = Field(100, ge=0, le=100)
+    stage: PersonaStage = PersonaStage.NEW
+    active_tier: int | None = None
+    next_tier: int | None = None
+    points_to_next_tier: float | None = None
+    unlocked_tiers: list[int] = Field(default_factory=list)
+    anniversary: GrowthAnniversary | None = None
+    today: GrowthToday
+    as_of: datetime
+    next_refresh_at: datetime
+    revision: int = 0
+    action_events: list[GrowthActionEvent] = Field(default_factory=list)
 
 
 # ===========================================================================

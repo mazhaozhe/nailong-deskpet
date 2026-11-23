@@ -16,6 +16,19 @@
   // 会话 5：动作调度的常量从 actions.js 取（单一事实源，不在两处各写一份优先级）
   const { ActionDirector, PRIORITY } = window;
   const intents = window.DeskpetIntents || { detectOpenIntent: () => null, detectTaskIntent: () => null };
+  const growthReasonLabels = {
+    chat: '有效聊天', todo_on_time: '完成待办', todo_late: '逾期补做',
+    overdue_24h: '超过截止时间 24 小时', overdue_72h: '超过截止时间 72 小时',
+    pending_7d: '无截止待办挂起 7 天'
+  };
+  const interactionText = { welcome: '回来啦！', sit: '我陪你坐会儿。', list_clear: '清单清空啦！', bedtime: '晚安，点我就能叫醒我。' };
+  const stageLabels = { new: '初识', familiar: '熟悉', close: '老友' };
+  const actionOrder = ['anniversary', 'list_clear', 'welcome'];
+  function scoreText(score) {
+    const value = Number(score);
+    const rounded = value.toFixed(2);
+    return value < 100 && rounded === '100.00' ? '99.99' : rounded;
+  }
 
   class Api {
     constructor() {
@@ -45,6 +58,40 @@
     post(path, body = {}) { return this.request(path, { method: 'POST', body: JSON.stringify(body) }); }
     patch(path, body) { return this.request(path, { method: 'PATCH', body: JSON.stringify(body) }); }
     delete(path) { return this.request(path, { method: 'DELETE' }); }
+
+    async parseNoticeDocument(file, mode, onProgress) {
+      const query = new URLSearchParams({ filename: file.name, mode });
+      const response = await fetch(`/api/notice/document?${query}`, {
+        method: 'POST',
+        headers: { 'X-User-Id': this.uid, 'Content-Type': 'application/octet-stream' },
+        body: file
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(typeof data.detail === 'string' ? data.detail : `上传失败（${response.status}）`);
+      }
+
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let pending = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          const lines = `${pending}${done ? '\n' : value}`.split('\n');
+          pending = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line);
+            if (event.type === 'progress') onProgress(event);
+            if (event.type === 'error') throw new Error(event.message);
+            if (event.type === 'result') return event;
+          }
+          if (done) break;
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+      }
+      throw new Error('文档处理连接已结束，请重试。');
+    }
   }
 
   class UiStateMachine {
@@ -53,7 +100,7 @@
     transition(next) {
       const allowed = this.state === 'collapsed'
         ? ['open']
-        : ['collapsed', 'open', 'notice', 'todos', 'settings', 'about', 'checklist'];
+        : ['collapsed', 'open', 'notice', 'todos', 'settings', 'about', 'checklist', 'interaction'];
       if (!allowed.includes(next)) return false;
       this.state = next;
       return true;
@@ -70,21 +117,27 @@
       // 那一下会读 this.taskScene（顺序反了 = 开局就抛 undefined）。
       this.taskScene = new TaskScene($('#taskScene'));
       this.taskTimer = null;
+      this.growth = null;
+      this.growthTimer = null;
+      this.panelWasHidden = false;
+      this.handledGrowthEvents = new Set();
+      this.claimingGrowthEvent = false;
       // 会话 5：动作调度层。所有动作切换都走 this.director.play()，
       // 不再各处散调 this.pet.switchTo()（散调就会互相抢帧、动作来回闪）。
       this.director = new ActionDirector({
         pet: this.pet,
         scene: $('#petScene'),
-        onChange: (key) => this.onActionChange(key)
+        onChange: (key, _action, interaction) => this.onActionChange(key, interaction)
       });
       this.todoCount = 0;
       this.todos = [];
-      this.growth = null;
       this.checklist = [];
+      this.checklistConfirmation = null;
       this.deadlineHint = null;
+      this.noticeFile = null;
+      this.noticeBusy = false;
       this.keyConfigured = false;
       this.keyPromptDismissed = false;
-      this.decisionToken = 0;
       this.toastTimer = null;
       this.bubbleTimer = null;
       this.pointer = null;
@@ -95,9 +148,11 @@
       this.chatSession = crypto.randomUUID ? crypto.randomUUID() : `chat-${Date.now()}`;
       this.chatTurns = [];       // 最近 ≤6 轮，回传做 history 播种（后端有记录时以后端为准）
       this.chatBusy = false;     // 请求在飞：锁住展开态，别让框在等回复时收起来
+      this.chatRetry = null;
       this.chatPinned = false;   // 输入框有焦点/有内容：同样锁住
       // ---- 会话 4：完整 Agent 第四态（默认关闭） ----
       this.agentMode = false;    // 只有显式打开才走 /agent/chat
+      this.agentModeUpdating = false;
       this.approvalBusy = false; // 审批窗在飞：防重复弹
     }
 
@@ -117,8 +172,8 @@
       const pump = (now) => { this.director.tick(now); requestAnimationFrame(pump); };
       requestAnimationFrame(pump);
       const jobs = [
-        this.pet.load().catch((error) => this.setBubble(error.message)),
-        this.api.post('/growth/simulate/clear').then(() => this.loadGrowth()).catch(() => this.setBubble('本地成长数据暂时读不到，点我仍可打开清单。')),
+        this.pet.load().then(() => this.playPendingGrowthAction()).catch((error) => this.setBubble(error.message)),
+        this.syncGrowth().catch(() => this.setBubble('本地成长数据暂时读不到，点我仍可打开清单。')),
         this.loadTodos().catch(() => {
           const count = $('#bubbleCount');
           if (count) count.textContent = '待办暂时没读到';
@@ -138,6 +193,9 @@
       if (command === 'open') { this.openPanel(); return; }
       if (typeof command !== 'object') return;
       if (command.type === 'lift') { this.handleLift(command); return; }
+      if (command.type === 'pet-activate') { this.activatePet({ openOnly: true }); return; }
+      if (command.type === 'interaction') { this.showView('interaction'); return; }
+      if (command.type === 'growth-refresh') { this.syncGrowth().catch(() => {}); return; }
       if (command.type === 'open') this.openPanel();
     }
 
@@ -161,10 +219,11 @@
     }
 
     // 动作切换的副作用：思考态挂任务小画面，其余收起来
-    onActionChange(key) {
+    onActionChange(key, interaction) {
       if (!this.taskScene) return;      // 构造期回调兜底（director 先于部分字段就位）
-      if (key === 'thinking') return;   // 小画面由任务演出单独控制，别在纯思考时闪一下
+      this.renderInteraction(key, interaction);
       if (this.taskScene.visible && ['lifted', 'land', 'idle'].includes(key)) this.hideTaskScene();
+      queueMicrotask(() => this.playPendingGrowthAction());
     }
 
     showTaskScene(kind, label) {
@@ -182,11 +241,36 @@
 
     bindEvents() {
       $('#closePanel').addEventListener('click', () => this.closePanel());
+      $('#openInteractions').addEventListener('click', () => this.showView('interaction'));
+      $('#growthActions').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-growth-action]');
+        if (!button || button.disabled) return;
+        if (button.dataset.growthAction === 'companion') this.showView('todos');
+        else this.playGrowthAction(button.dataset.growthAction, { replace: true });
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) this.panelWasHidden = this.machine.state !== 'collapsed';
+        else this.syncGrowth().catch(() => {});
+      });
       $$('.panel-tabs [data-view]').forEach((button) => button.addEventListener('click', () => this.showView(button.dataset.view)));
-      $$('[data-simulate]').forEach((button) => button.addEventListener('click', () => this.simulate(Number(button.dataset.simulate))));
-      $('#clearSimulation').addEventListener('click', () => this.clearSimulation());
+
+
       $('#parseNotice').addEventListener('click', () => this.parseNotice());
-      $('#clearNotice').addEventListener('click', () => { $('#noticeText').value = ''; $('#checklist').replaceChildren(); $('#confirmChecklist').disabled = true; });
+      $('#clearNotice').addEventListener('click', () => {
+        $('#noticeText').value = '';
+        this.setNoticeFile(null);
+      });
+      $('#chooseNoticeFile').addEventListener('click', () => $('#noticeFile').click());
+      $('#noticeFile').addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (file && !/\.(pdf|docx|txt)$/i.test(file.name)) {
+          this.setNoticeFile(null);
+          $('#parseStatus').textContent = '请选择 PDF、Word（.docx）或 TXT 文件。';
+          return;
+        }
+        this.setNoticeFile(file || null);
+      });
+      $('#removeNoticeFile').addEventListener('click', () => this.setNoticeFile(null));
       $('#confirmChecklist').addEventListener('click', () => this.confirmChecklist());
       $('#exportDocx').addEventListener('click', () => this.exportDocx());
       $('#addTodo').addEventListener('click', () => this.addTodo());
@@ -218,33 +302,49 @@
       this.bindAgentMode();
     }
 
-    activatePet() {
-      this.director.play('wave', { source: 'activate' });
-      if (this.machine.state === 'collapsed') this.openPanel();
-      else this.closePanel();
+    activatePet({ openOnly = false } = {}) {
+      if (this.director.wakeInteraction()) return;
+      if (this.machine.state === 'collapsed' || openOnly) this.openPanel({ react: true });
+      else {
+        this.closePanel();
+        if (!this.director.active.interaction) this.director.play('wave', { source: 'activate' });
+      }
     }
 
-    openPanel() {
-      if (this.machine.state === 'collapsed') this.machine.transition('open');
-      $('#panel').hidden = false;
-      if (this.machine.state === 'open') this.showView('notice');
+    openPanel({ react = false } = {}) {
+      if (this.machine.state === 'collapsed') {
+        this.showView('notice', { react });
+        return;
+      }
+      this.refreshOpenPanel({ react });
     }
 
     closePanel() {
       this.machine.transition('collapsed');
       $('#panel').hidden = true;
-      // 收起面板 = 交还动作控制权：回 idle，空闲轮播由 pet.js 自己接手
-      this.director.reset();
+      if (this.director.active.interaction?.kind === 'welcome') this.director.release('interaction');
     }
 
-    showView(name) {
-      if (this.machine.state === 'collapsed') this.machine.transition('open');
+    showView(name, { react = false } = {}) {
+      const opening = this.machine.state === 'collapsed';
+      if (opening) this.machine.transition('open');
       this.machine.transition(name);
       $('#panel').hidden = false;
       $$('.view').forEach((view) => view.classList.toggle('active', view.id === `${name}View`));
       $$('.panel-tabs [data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === name));
       if (name === 'todos') this.loadTodos().catch(() => {});
       if (name === 'settings') { this.loadKeyStatus().catch(() => {}); this.loadModelSwitch().catch(() => {}); }
+      if (opening || this.panelWasHidden) this.refreshOpenPanel({ opening, react });
+    }
+
+    async refreshOpenPanel({ opening = false, react = false } = {}) {
+      const panelOpen = opening || this.panelWasHidden;
+      this.panelWasHidden = false;
+      const growth = await this.syncGrowth({ panelOpen }).catch(() => null);
+      if (react && this.machine.state !== 'collapsed' && !this.director.active.interaction &&
+          !growth?.action_events?.some(({ kind }) => kind === 'welcome')) {
+        this.director.play('wave', { source: 'activate' });
+      }
     }
 
     setBubble(text, note = '', degraded = false) {
@@ -561,9 +661,7 @@
       this.chatBusy = true;
       this.setChatPinned(true);
       this.updateChatSend();
-      this.appendChat('user', text);
-      this.chatTurns.push({ role: 'user', content: text });
-      this.chatTurns = this.chatTurns.slice(-12);
+      const turn = this.beginChatTurn(text, 'chat');
       const typing = this.showChatTyping();
       // 请求一发出立刻进思考态：不等后端（关态走规则回复同样有思考态）
       this.beginThinking('chat');
@@ -571,6 +669,7 @@
         const result = await this.api.post('/chat', {
           message: text,
           session_id: this.chatSession,
+          request_id: turn.id,
           history: this.chatTurns.slice(-12)
         });
         this.clearChatTyping(typing);
@@ -579,6 +678,7 @@
         this.chatTurns.push({ role: 'assistant', content: reply });
         this.chatTurns = this.chatTurns.slice(-12);
         this.endThinking('chat');
+        this.renderGrowth(result.growth);
         if (result.data && result.data.mood) {
           this.director.play(this.chatMoodAnimation(result.data.mood),
             { priority: PRIORITY.MOOD, ttl: 2200, source: 'chat-mood' });
@@ -586,7 +686,7 @@
       } catch (error) {
         this.clearChatTyping(typing);
         this.endThinking('chat');
-        this.appendChat('pet', `本地服务暂时没回应：${error.message}`);
+        this.retryChatTurn(input, turn, error);
       } finally {
         this.clearChatTyping(typing);
         this.endThinking('chat');   // 失败 / 超时也一定退出思考态，不许卡死
@@ -598,37 +698,60 @@
       }
     }
 
+    beginChatTurn(text, mode) {
+      const retry = this.chatRetry;
+      this.chatRetry = null;
+      if (retry?.text === text && retry.mode === mode) return retry;
+      this.appendChat('user', text);
+      this.chatTurns = this.chatTurns.slice(-11);
+      this.chatTurns.push({ role: 'user', content: text });
+      return { id: crypto.randomUUID(), text, mode };
+    }
+
+    retryChatTurn(input, turn, error) {
+      this.chatRetry = turn;
+      if (!input.value) input.value = turn.text;
+      this.appendChat('pet', `本地服务暂时没回应：${error.message}`);
+    }
+
     // ---- 会话 4：完整 Agent 第四态 ----
     // 来源标注四态如实：模型回 / 规则兜底 / 降级 / 来自网络，绝不混写。
     bindAgentMode() {
-      const toggle = $('#agentMode');
-      if (!toggle) return;
-      toggle.addEventListener('change', async () => {
-        const next = Boolean(toggle.checked);
-        try {
-          await this.api.post('/agent/mode', { enabled: next });
-          this.agentMode = next;
-          toggle.closest('.agent-toggle').classList.toggle('on', next);
-          this.toast(next
-            ? 'Agent 模式已打开：可以联网、用工具；写文件/执行命令前会先问你'
-            : 'Agent 模式已关闭：回到普通聊天');
-        } catch (error) {
-          toggle.checked = this.agentMode;   // 失败回滚开关
-          this.toast(`切换失败：${error.message}`);
-        }
+      $$('#agentMode, #noticeAgentMode').forEach((toggle) => {
+        toggle.addEventListener('change', async () => {
+          const next = toggle.checked;
+          this.renderAgentMode(true);
+          try {
+            await this.api.post('/agent/mode', { enabled: next });
+            this.agentMode = next;
+            this.toast(next ? 'Agent 模式已打开' : 'Agent 模式已关闭');
+          } catch (error) {
+            this.toast(`切换失败：${error.message}`);
+          } finally {
+            this.renderAgentMode();
+          }
+        });
+      });
+    }
+
+    renderAgentMode(updating = false) {
+      this.agentModeUpdating = updating;
+      $('#parseNotice').disabled = this.noticeBusy || updating;
+      $$('#agentMode, #noticeAgentMode').forEach((toggle) => {
+        toggle.checked = this.agentMode;
+        toggle.disabled = updating;
+        toggle.closest('.agent-toggle').classList.toggle('on', this.agentMode);
       });
     }
 
     async syncAgentMode() {
+      this.renderAgentMode(true);
       try {
         const status = await this.api.get('/agent/status');
         this.agentMode = Boolean(status.agent_mode);
-        const toggle = $('#agentMode');
-        if (toggle) {
-          toggle.checked = this.agentMode;
-          toggle.closest('.agent-toggle').classList.toggle('on', this.agentMode);
-        }
-      } catch {}   // 状态读不到就保持默认关，不打扰主流程
+      } finally {
+        this.renderAgentMode();
+      }
     }
 
     // 审批循环：pending_approval → 弹窗（无壳环境自动按拒绝处理）→ 提交决定
@@ -674,15 +797,14 @@
       this.chatBusy = true;
       this.setChatPinned(true);
       this.updateChatSend();
-      this.appendChat('user', text);
-      this.chatTurns.push({ role: 'user', content: text });
-      this.chatTurns = this.chatTurns.slice(-12);
+      const turn = this.beginChatTurn(text, 'agent');
       const typing = this.showChatTyping();
       this.beginThinking('agent');
       try {
         let result = await this.api.post('/agent/chat', {
           message: text,
-          session_id: this.chatSession
+          session_id: this.chatSession,
+          request_id: turn.id
         });
         this.clearChatTyping(typing);
         // 审批循环期间继续显示思考态（模型在等你的决定，不是在发呆）
@@ -695,11 +817,12 @@
         this.chatTurns.push({ role: 'assistant', content: reply });
         this.chatTurns = this.chatTurns.slice(-12);
         this.endThinking('agent');
+        this.renderGrowth(result.growth);
         this.director.play(result.status === 'ok' ? 'celebrate' : 'shy',
           { ttl: 2000, source: 'agent-mood' });
       } catch (error) {
         this.clearChatTyping(typing);
-        this.appendChat('pet', `本地服务暂时没回应：${error.message}`);
+        this.retryChatTurn(input, turn, error);
       } finally {
         this.clearChatTyping(typing);
         this.endThinking('agent');
@@ -723,28 +846,118 @@
       this.renderGrowth(result.data);
     }
 
-    renderGrowth(growth) {
-      this.growth = growth;
-      const displayDay = Math.max(1, growth.days_known);
-      const text = `认识你的第 ${displayDay} 天`;
+    async syncGrowth({ panelOpen = false } = {}) {
+      try {
+        const { data } = await this.api.post('/growth/sync', { panel_open: panelOpen });
+        this.renderGrowth(data);
+        return data;
+      } catch (error) {
+        clearTimeout(this.growthTimer);
+        this.growthTimer = setTimeout(() => this.syncGrowth().catch(() => {}), 30000);
+        throw error;
+      }
+    }
+
+    renderGrowth(snapshot) {
+      if (!snapshot) return;
+      const older = this.growth && (snapshot.revision < this.growth.revision ||
+        (snapshot.revision === this.growth.revision && Date.parse(snapshot.as_of) < Date.parse(this.growth.as_of)));
+      if (older) return;
+      const priorTiers = this.growth?.unlocked_tiers;
+      this.growth = snapshot;
+      const growth = this.growth;
+      const text = `认识你的第 ${growth.days_known} 天`;
       $('#daysBadge').textContent = text;
       $('#panelDays').textContent = text;
-      $('#stageText').textContent = growth.stage || '初识';
+      $('#stageText').textContent = stageLabels[growth.stage] || '';
+      $('#growthScore').textContent = `亲密度 ${scoreText(growth.intimacy)}`;
+      $('#growthNext').textContent = growth.next_tier == null ? '' :
+        `距 ${growth.next_tier} 档还差 ${scoreText(Math.max(0.01, growth.points_to_next_tier))}`;
+      this.renderGrowthDetails(growth);
+      if (priorTiers) {
+        if (!priorTiers.includes(95) && growth.unlocked_tiers?.includes(95)) {
+          this.toast('已解锁晚安，可以在互动菜单使用。');
+        } else if (!priorTiers.includes(85) && growth.unlocked_tiers?.includes(85) &&
+                   !growth.action_events?.some(({ kind, also_list_clear }) => kind === 'list_clear' || also_list_clear)) {
+          this.toast('已解锁清单清空，可以在互动菜单回放。');
+        }
+      }
+      const delay = Date.parse(growth.next_refresh_at) - Date.parse(growth.as_of);
+      if (Number.isFinite(delay)) {
+        clearTimeout(this.growthTimer);
+        this.growthTimer = setTimeout(() => this.syncGrowth().catch(() => {}), Math.max(250, delay));
+      }
+      this.playPendingGrowthAction();
     }
 
-    async simulate(day) {
-      const result = await this.api.post('/growth/simulate', { target_day: day });
-      this.renderGrowth(result.data);
-      this.director.play(day >= 30 ? 'celebrate' : 'shy',
-        { ttl: 2400, source: 'simulate' });
-      this.setBubble(`现在只是展示第 ${day} 天的样子，刷新就回真实天数。`, '模拟展示，不写历史');
+    renderGrowthDetails(growth) {
+      const today = growth.today;
+      const reasons = $('#growthReasons');
+      reasons.replaceChildren();
+      $('#growthToday').textContent = today?.reasons?.length
+        ? `今日亲密度 +${scoreText(today.gained)} / −${scoreText(today.lost)}` : '今日暂无亲密度变化';
+      for (const reason of today?.reasons || []) {
+        const line = document.createElement('li');
+        const label = growthReasonLabels[reason.kind];
+        if (!label) continue;
+        const points = Math.abs(reason.delta);
+        const sign = reason.delta < 0 ? '−' : '+';
+        const delta = points > 0 && points < 0.01 ? `不足 0.01（${sign}）` : `${sign}${scoreText(points)}`;
+        line.textContent = `${label} × ${reason.count} · ${delta}`;
+        reasons.append(line);
+      }
+      const unlocked = growth.unlocked_tiers || [];
+      $$('[data-growth-action]').forEach((button) => { button.disabled = !unlocked.includes(Number(button.dataset.tier)); });
+      $$('.todo-companion').forEach((button) => { button.hidden = !unlocked.includes(75); });
+      const card = growth.anniversary;
+      $('#anniversaryCard').hidden = !card;
+      if (card) {
+        $('#anniversaryDays').textContent = `认识你的第 ${card.days_known} 天`;
+        const date = $('#anniversaryDate');
+        date.dateTime = card.unlocked_at;
+        date.textContent = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long', timeZone: 'Asia/Shanghai' }).format(new Date(card.unlocked_at));
+      }
     }
 
-    async clearSimulation() {
-      const result = await this.api.post('/growth/simulate/clear');
-      this.renderGrowth(result.data);
-      this.director.reset();
-      this.setBubble('回来啦，这里显示的是真实认识天数。');
+    async playPendingGrowthAction() {
+      if (this.claimingGrowthEvent || document.hidden ||
+          !this.director?.canPlayInteraction() || !this.pet.animationDuration('wave')) return;
+      const unhandled = (this.growth?.action_events || []).filter((action) => !this.handledGrowthEvents.has(action.id));
+      const event = actionOrder.map((kind) => unhandled.find((action) => action.kind === kind)).find(Boolean);
+      if (!event) return;
+      this.claimingGrowthEvent = true;
+      try {
+        const result = await this.api.post(`/growth/actions/${encodeURIComponent(event.id)}/claim`);
+        this.handledGrowthEvents.add(event.id);
+        const visible = !document.hidden && (event.kind !== 'welcome' || this.machine.state !== 'collapsed');
+        if (result.claimed && visible) {
+          this.playGrowthAction(event.kind, { alsoListClear: event.also_list_clear });
+        }
+      } catch {
+        return;
+      } finally {
+        this.claimingGrowthEvent = false;
+      }
+      this.playPendingGrowthAction();
+    }
+
+    playGrowthAction(kind, options = {}) {
+      const days = this.growth?.anniversary?.days_known;
+      const text = options.text ?? (kind === 'anniversary' && days ? `认识你的第 ${days} 天` : interactionText[kind]);
+      if (!this.director.playInteraction(kind, { ...options, text }) && options.replace) {
+        this.toast('奶龙正在忙，等它空下来再试。');
+      }
+    }
+
+    renderInteraction(key, interaction) {
+      const bubble = $('#interactionBubble');
+      bubble.textContent = interaction?.text || '';
+      bubble.hidden = !bubble.textContent;
+      $('#interactionCheck').hidden = key !== 'celebrate' || !interaction ||
+        (interaction.kind !== 'list_clear' && !interaction.alsoListClear);
+      $('#interactionConfetti').hidden = key !== 'celebrate' || interaction?.kind !== 'anniversary';
+      $('#petCanvas').setAttribute('aria-label', interaction?.kind === 'bedtime'
+        ? '奶龙在睡觉，点击或按回车唤醒' : '奶龙，单击打开清单，按住拖动；也可按回车打开');
     }
 
     async loadNotices() {
@@ -758,7 +971,10 @@
         button.dataset.sample = notice.id;
         button.textContent = notice.title;
         button.title = '只填入文本，不写库';
-        button.addEventListener('click', () => { $('#noticeText').value = notice.text; });
+        button.addEventListener('click', () => {
+          this.setNoticeFile(null);
+          $('#noticeText').value = notice.text;
+        });
         container.append(button);
       });
     }
@@ -789,8 +1005,18 @@
         checkbox.checked = todo.status === 'done';
         checkbox.setAttribute('aria-label', `完成 ${todo.title}`);
         checkbox.addEventListener('change', async () => {
-          await this.api.patch(`/todos/${todo.id}`, { status: checkbox.checked ? 'done' : 'pending' });
-          await Promise.all([this.loadTodos(), this.loadGrowth()]);
+          checkbox.disabled = true;
+          try {
+            const result = await this.api.patch(`/todos/${todo.id}`, { status: checkbox.checked ? 'done' : 'pending' });
+            checkbox.checked = result.data.status === 'done';
+            this.renderGrowth(result.growth);
+            this.loadTodos().catch(() => this.toast('待办已保存，列表暂时没能刷新。'));
+          } catch (error) {
+            checkbox.checked = todo.status === 'done';
+            this.toast(`待办暂时没能更新：${error.message}`);
+          } finally {
+            checkbox.disabled = false;
+          }
         });
         const body = document.createElement('div');
         const title = document.createElement('strong');
@@ -811,8 +1037,20 @@
         const remove = document.createElement('button');
         remove.textContent = '删';
         remove.setAttribute('aria-label', `删除 ${todo.title}`);
-        remove.addEventListener('click', async () => { await this.api.delete(`/todos/${todo.id}`); await this.loadTodos(); });
+        remove.addEventListener('click', async () => {
+          await this.api.delete(`/todos/${todo.id}`);
+          await Promise.all([this.loadTodos(), this.loadGrowth()]);
+        });
         actions.append(ask, remove);
+        if (todo.status !== 'done') {
+          const companion = document.createElement('button');
+          companion.type = 'button';
+          companion.className = 'todo-companion';
+          companion.textContent = '陪我做这项';
+          companion.hidden = !this.growth?.unlocked_tiers?.includes(75);
+          companion.addEventListener('click', () => this.playGrowthAction('companion', { text: todo.title, replace: true }));
+          body.append(companion);
+        }
         row.append(checkbox, body, actions);
         list.append(row);
       }
@@ -903,53 +1141,88 @@
       }
     }
 
+    setNoticeFile(file) {
+      this.noticeFile = file;
+      if (!file) $('#noticeFile').value = '';
+      const name = $('#noticeFileName');
+      name.textContent = file?.name || '';
+      name.title = file?.name || '';
+      $('#removeNoticeFile').hidden = !file;
+      $('#noticeText').disabled = Boolean(file);
+      $('#parseStatus').textContent = '';
+      this.checklist = [];
+      this.deadlineHint = null;
+      this.renderChecklist();
+    }
+
+    setNoticeBusy(busy) {
+      this.noticeBusy = busy;
+      $('#parseNotice').disabled = busy || this.agentModeUpdating;
+      $$('#clearNotice, #chooseNoticeFile, #noticeFile, #removeNoticeFile, #noticeSamples button')
+        .forEach((control) => { control.disabled = busy; });
+      $('#noticeText').disabled = busy || Boolean(this.noticeFile);
+    }
+
     async parseNotice() {
+      if (this.noticeBusy || this.agentModeUpdating) return;
+      const file = this.noticeFile;
       const text = $('#noticeText').value.trim();
-      if (!text) { this.toast('先贴一条通知吧'); return; }
+      if (!file && !text) { this.toast('先粘贴通知或选择文件'); return; }
+
       this.showView('notice');
-      $('#parseNotice').disabled = true;
-      $('#parseStatus').textContent = '正在按确定性步骤拆解…';
-      const token = ++this.decisionToken;
-      const pieces = text.split(/[。；;\n]/).map((part) => part.trim()).filter(Boolean);
-      const stages = [
-        `${Math.max(1, pieces.length)} 件事，我一件件理清，不着急。`,
-        '先把真正要交的东西挑出来，再看时间。',
-        this.todos.length ? `手上还有 ${this.todos.length} 件没做完，一起排好顺序。` : '清单还是空的，正好从头排起。',
-        /(周|月|日|号|截止|前|\d{1,2}[:/])/.test(text) ? '截止时间我记下了，会提前提醒你。' : '这条没写截止时间，我先把缺口标出来。'
-      ];
-      const parsePromise = this.api.post('/notice/parse', { notice_text: text, use_v4_pro: false });
-      this.renderTodoStrip(pieces);
-      for (const stage of stages) {
-        if (token !== this.decisionToken) return;
-        this.setBubble(stage);
-        await wait(260);
-      }
+      this.setNoticeBusy(true);
+      this.checklist = [];
+      this.deadlineHint = null;
+      this.renderChecklist();
+      const mode = this.agentMode ? 'agent' : 'standard';
+      const label = this.agentMode ? 'Agent 文档模式' : '普通模式';
+      const status = $('#parseStatus');
+      status.textContent = `${label} · ${file ? '正在读取文件' : '正在拆解通知'}…`;
+      this.setBubble(status.textContent);
       try {
-        const result = await parsePromise;
+        const result = file
+          ? await this.api.parseNoticeDocument(file, mode, ({ stage, processed, total, location }) => {
+            const phase = stage === 'review' ? '正在复核清单' : '正在提取文字与图片';
+            const count = total > 0 ? ` ${processed}/${total}` : '';
+            status.textContent = `${label} · ${phase}${count}${location ? ` · ${location}` : ''}`;
+          })
+          : await this.api.post('/notice/parse', { notice_text: text, mode, use_v4_pro: false });
         this.checklist = result.data.items || [];
-        this.deadlineHint = result.data.deadline_hint || null;
+        this.deadlineHint = file ? null : (result.data.deadline_hint || null);
         this.renderChecklist();
         this.renderTodoStrip(this.checklist.map((item) => item.text));
-        this.machine.transition('checklist');
+        if (this.machine.state === 'notice') this.machine.transition('checklist');
         const degraded = Boolean(result.degraded);
-        this.setBubble('这几件事请你过一眼，缺的东西我都标出来了。', degraded ? '（规则版，未调模型）' : '', degraded);
-        $('#parseStatus').textContent = degraded ? `规则版已完成${result.degrade_reason ? `：${result.degrade_reason}` : ''}` : '模型抽取已完成';
+        const outcome = { model: '模型抽取完成', rules: '本地规则完成', agent: 'Agent 复核完成' }[result.mode];
+        const message = this.checklist.length ? `提取到 ${this.checklist.length} 项，请核对后确认` : '未提取到待办';
+        status.textContent = [
+          `${label} · ${outcome} · ${message}`,
+          result.degrade_reason, ...(result.warnings || [])
+        ].filter(Boolean).join('\n');
+        this.setBubble(this.checklist.length ? '这几件事请你过一眼。' : '这份通知里没有提取到待办。',
+          result.mode === 'rules' ? '（规则版）' : '', degraded);
         if (degraded && !this.keyConfigured && !this.keyPromptDismissed) $('#keyPrompt').hidden = false;
       } catch (error) {
-        this.checklist = pieces.map((piece) => ({ text: piece, category: 'deliverable', matched: false }));
-        this.deadlineHint = null;
-        this.renderChecklist();
-        this.renderTodoStrip(this.checklist.map((item) => item.text));
-        this.machine.transition('checklist');
-        this.setBubble('本地服务暂时没回应，我先按页面规则替你理好了，随时可以再试。', '（规则版，未调模型）', true);
-        $('#parseStatus').textContent = error.message;
+        if (file) {
+          status.textContent = `${label} · 文档处理失败\n${error.message}`;
+          this.setBubble('文档处理失败，请查看通知页。', '', true);
+        } else {
+          const pieces = text.split(/[。；;\n]/).map((part) => part.trim()).filter(Boolean);
+          this.checklist = pieces.map((piece) => ({ text: piece, category: 'deliverable', matched: false }));
+          this.renderChecklist();
+          this.renderTodoStrip(this.checklist.map((item) => item.text));
+          if (this.machine.state === 'notice') this.machine.transition('checklist');
+          this.setBubble('本地服务暂时没回应，我先按页面规则分了几条。', '（规则版，未调模型）', true);
+          status.textContent = `${label} · 页面规则完成\n${error.message}`;
+        }
       } finally {
-        $('#parseNotice').disabled = false;
+        this.setNoticeBusy(false);
       }
     }
 
     renderChecklist() {
       const container = $('#checklist');
+      this.checklistConfirmation = null;
       container.replaceChildren();
       this.checklist.forEach((item, index) => {
         const card = document.createElement('div');
@@ -966,25 +1239,69 @@
         const text = document.createElement('p');
         text.textContent = item.text;
         body.append(category, text);
+        const sources = item.sources?.length ? item.sources : [item.source].filter(Boolean);
+        if (sources.length) {
+          const source = document.createElement('small');
+          source.className = 'check-source';
+          source.textContent = `出处 · ${sources.join('、')}`;
+          body.append(source);
+        }
+        const deadline = toLocalInput(item.deadline_hint);
+        if (deadline || item.needs_review) {
+          const details = document.createElement('small');
+          details.className = 'check-source';
+          details.textContent = [
+            deadline ? `截止 · ${deadline.replace('T', ' ')}` : '',
+            item.needs_review ? '请核对原文' : ''
+          ].filter(Boolean).join(' · ');
+          body.append(details);
+        }
         card.append(checkbox, body);
         container.append(card);
       });
-      $('#confirmChecklist').disabled = this.checklist.length === 0;
+      const button = $('#confirmChecklist');
+      button.disabled = this.checklist.length === 0;
+      button.textContent = '确认落待办';
     }
 
     async confirmChecklist() {
-      if (!this.checklist.length) return;
-      const items = this.checklist.map((item, index) => ({
-        text: item.text, category: item.category, matched: $(`#check-${index}`).checked
-      }));
+      const button = $('#confirmChecklist');
+      if (this.noticeBusy || button.disabled || !this.checklist.length) return;
+      button.disabled = true;
+      button.textContent = '正在提交…';
+      this.setNoticeBusy(true);
+      let confirmed = false;
       try {
-        await this.api.post('/notice/confirm', { items, deadline_override: this.deadlineHint });
+        if (!this.checklistConfirmation) {
+          const items = this.checklist.map((item, index) => {
+            const checkbox = $(`#check-${index}`);
+            checkbox.disabled = true;
+            return {
+              text: item.text,
+              category: item.category,
+              matched: checkbox.checked,
+              deadline_hint: item.deadline_hint ?? null
+            };
+          });
+          // 请求超时也可能已落库，重试须带回同一份选择和确认编号。
+          this.checklistConfirmation = {
+            confirmation_id: crypto.randomUUID(), items, deadline_override: this.deadlineHint
+          };
+        }
+        await this.api.post('/notice/confirm', this.checklistConfirmation);
+        confirmed = true;
         await Promise.all([this.loadTodos(), this.loadGrowth()]);
         this.director.play('work', { ttl: 2600, source: 'checklist' });
         const pending = this.pendingTodos();
         this.setBubble(this.reminderLine(pending), this.nearestDeadline(pending));
         this.showView('todos');
-      } catch (error) { this.toast(error.message); }
+      } catch (error) {
+        this.toast(confirmed ? '清单已保存，列表刷新失败，请重新打开待办页。' : error.message);
+      } finally {
+        button.textContent = confirmed ? '清单已确认' : '重试确认';
+        button.disabled = confirmed;
+        this.setNoticeBusy(false);
+      }
     }
 
     // ---- 阶段 9：一句话补待办（只解析、只回填，落库仍由用户点「添加」） ----

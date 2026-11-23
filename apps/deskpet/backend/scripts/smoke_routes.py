@@ -89,14 +89,8 @@ def main() -> int:
     r = client.get("/api/growth")
     results.append(_check("GET /api/growth", r, OK))
 
-    r = client.post("/api/growth/simulate", json={"target_day": 7})
-    results.append(_check("POST /api/growth/simulate target=7", r, OK))
-    r = client.post("/api/growth/simulate", json={"target_day": 9999})
-    results.append(_check("POST /api/growth/simulate target=9999 校验拦截", r, VALIDATION))
-    r = client.post("/api/growth/simulate", json={})
-    results.append(_check("POST /api/growth/simulate 空体校验拦截", r, VALIDATION))
-    r = client.post("/api/growth/simulate/clear")
-    results.append(_check("POST /api/growth/simulate/clear 清除模拟", r, OK))
+    r = client.post("/api/growth/sync", json={})
+    results.append(_check("POST /api/growth/sync 真实日期", r, OK))
 
     # ==========================================================
     # 2. 待办 CRUD

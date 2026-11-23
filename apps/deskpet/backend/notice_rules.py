@@ -44,7 +44,7 @@ def _classify_line(line: str) -> str:
     return "other"
 
 
-def _extract_deadline_hint(text: str) -> datetime | None:
+def extract_deadline_hint(text: str) -> datetime | None:
     """从通知里抽截止时间。简单规则，阶段 3 由模型替代。"""
     now = datetime.now()
     for rx, kind in _DEADLINE_PATTERNS:
@@ -63,7 +63,7 @@ def _extract_deadline_hint(text: str) -> datetime | None:
     return None
 
 
-def parse_notice_by_rules(notice_text: str) -> NoticeParseResult:
+def parse_notice_by_rules(notice_text: str, *, extract_deadline: bool = True) -> NoticeParseResult:
     """规则版通知拆分。按标点/换行切句，逐句分类。"""
     # 按换行、句号、分号、顿号切
     raw_lines = re.split(r"[\n。；;，,、]+", notice_text)
@@ -84,7 +84,7 @@ def parse_notice_by_rules(notice_text: str) -> NoticeParseResult:
         items.append(ChecklistItem(
             text=notice_text[:50], category="other", matched=False))
 
-    deadline = _extract_deadline_hint(notice_text)
+    deadline = extract_deadline_hint(notice_text) if extract_deadline else None
     summary = "、".join(i.text for i in items[:3])
     if len(items) > 3:
         summary += f" 等 {len(items)} 条"
@@ -101,5 +101,5 @@ def parse_voice_by_rules(text: str) -> VoiceParseResult:
     置信度给低分 0.6，让前端提示用户确认（模型版的对照值）。
     """
     title = re.sub(r"\s+", " ", text).strip()[:200] or text[:200]
-    deadline = _extract_deadline_hint(text)
+    deadline = extract_deadline_hint(text)
     return VoiceParseResult(title=title, deadline=deadline, confidence=0.6)

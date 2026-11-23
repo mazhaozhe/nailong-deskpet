@@ -8,18 +8,27 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from apps.deskpet.backend import storage
 from apps.deskpet.backend.api import cleanup_expired_exports, download_router, router
 from apps.deskpet.backend.auth import auth_middleware
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    with closing(storage.get_connection()) as conn:
+        storage.init_schema(conn)
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="桌宠 · 软件工程作业")
+    app = FastAPI(title="桌宠 · 软件工程作业", lifespan=lifespan)
     app.middleware("http")(auth_middleware)
     app.include_router(router)
     # P0-1：导出文件下载路由（/exports/{filename}，白名单校验在 api.py）

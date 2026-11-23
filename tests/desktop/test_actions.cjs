@@ -23,7 +23,12 @@ function setup() {
   const pet = {
     calls: [],
     holds: [],
-    switchTo(key) { this.calls.push(key); return true; },
+    modes: [],
+    animationDuration(key) {
+      const animation = manifest.animations.find((entry) => entry.key === key);
+      return animation.frames.length * 1000 / animation.fps;
+    },
+    switchTo(key, mode) { this.calls.push(key); this.modes.push(mode); return true; },
     setHold(value) { this.holds.push(value); }
   };
   const scene = { dataset: {} };
@@ -148,4 +153,83 @@ test('历史记录保留最近切换，便于验收抽查', () => {
   const keys = [...director.history].map((item) => item.key);
   assert.deepEqual(keys.slice(-2), ['thinking', 'idle']);
   assert.ok(director.history.length <= 20);
+});
+
+test('问候先东张西望，再挥手一轮，最后回到待机', () => {
+  const { director, pet, advance } = setup();
+  assert.equal(director.playInteraction('welcome'), true);
+  assert.equal(pet.calls.at(-1), 'idle2');
+  assert.equal(pet.modes.at(-1), 'once');
+  advance(1714);
+  assert.equal(director.tick(), false);
+  advance(1);
+  assert.equal(director.tick(), true);
+  assert.equal(pet.calls.at(-1), 'wave');
+  advance(1143);
+  director.tick();
+  assert.equal(director.current(), 'idle');
+});
+
+test('晚安打完哈欠后保持睡姿，激活一次就唤醒', () => {
+  const { director, pet, advance } = setup();
+  director.playInteraction('bedtime');
+  assert.equal(pet.calls.at(-1), 'idle4');
+  advance(2667);
+  director.tick();
+  assert.equal(pet.calls.at(-1), 'sleep');
+  assert.equal(pet.modes.at(-1), 'hold-last');
+  advance(60000);
+  assert.equal(director.tick(), false);
+  assert.equal(director.current(), 'sleep');
+  assert.equal(director.wakeInteraction(), true);
+  assert.equal(director.current(), 'idle');
+  assert.equal(director.wakeInteraction(), false);
+});
+
+test('真实任务打断陪做，即使两者正在用同一组 work 帧', () => {
+  const { director, pet, scene, advance } = setup();
+  director.playInteraction('companion');
+  assert.equal(scene.dataset.interaction, 'companion');
+  assert.equal(director.play('work', { source: 'checklist', ttl: 500 }), true);
+  assert.equal(scene.dataset.interaction, undefined);
+  assert.equal(pet.calls.at(-1), 'work');
+  assert.equal(pet.modes.at(-1), 'loop');
+  advance(500);
+  director.tick();
+  advance(4000);
+  director.tick();
+  assert.equal(director.current(), 'idle');
+  assert.equal(pet.calls.includes('sit'), false, '打断后的下一段不应复活');
+});
+
+test('拖拽优先，忙时互动不进入普通动作队列', () => {
+  const { director } = setup();
+  director.play('lifted', { source: 'drag' });
+  assert.equal(director.playInteraction('anniversary'), false);
+  director.release('drag');
+  assert.equal(director.current(), 'idle');
+});
+
+test('真实帧播放器在表现模式下钳住睡眠末帧，在循环模式下从头播', () => {
+  const images = [];
+  const canvas = {
+    dataset: {},
+    addEventListener() {},
+    getContext() { return { clearRect() {}, drawImage(image) { images.push(image); } }; }
+  };
+  const context = { window: {}, performance: { now: () => 0 }, document: { hidden: false }, requestAnimationFrame() {} };
+  vm.runInNewContext(fs.readFileSync(path.join(RENDERER, 'pet.js'), 'utf8'), context);
+  const player = new context.window.PetController(canvas, null, () => {});
+  const sleep = manifest.animations.find(({ key }) => key === 'sleep');
+  player.animations.set(sleep.key, sleep);
+  sleep.frames.forEach(({ name }) => player.images.set(name, name));
+  player.setHold(true);
+  player.switchTo('sleep', 'hold-last');
+  player.tick(2700);
+  assert.equal(images.at(-1), sleep.frames.at(-1).name);
+  player.tick(60000);
+  assert.equal(images.length, 1);
+  player.switchTo('sleep', 'loop');
+  player.tick(2700);
+  assert.equal(images.at(-1), sleep.frames[0].name);
 });

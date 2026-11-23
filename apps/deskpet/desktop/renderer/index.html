@@ -22,14 +22,28 @@
         <button data-view="about">关于</button>
       </nav>
       <div class="growth-strip">
-        <strong id="panelDays">认识你的第 1 天</strong>
-        <div><button data-simulate="7">第 7 天</button><button data-simulate="30">第 30 天</button><button data-simulate="100">第 100 天</button><button id="clearSimulation">真实</button></div>
+        <div class="growth-heading">
+          <strong id="panelDays">相识天数加载中</strong>
+          <button id="openInteractions" type="button">互动</button>
+        </div>
+        <div class="growth-status"><span id="growthScore"></span><span id="growthNext"></span></div>
+
+        <details class="growth-receipt"><summary id="growthToday">今日亲密度</summary><ul id="growthReasons"></ul></details>
       </div>
       <div class="panel-content">
         <section id="noticeView" class="view active">
-          <div class="section-title"><div><h2>贴通知，拆成对照卡</h2><p>样例只填文本，不会替你写库。</p></div><span class="soft-badge">本地</span></div>
+          <div class="section-title">
+            <div><h2>通知拆成清单</h2><p>支持 PDF、Word（.docx）和 TXT。图片文字在本机识别。</p></div>
+            <label class="agent-toggle" title="开启后使用 Agent 文档模式复核本次通知"><input id="noticeAgentMode" type="checkbox">Agent 模式</label>
+          </div>
           <div id="noticeSamples" class="notice-samples" aria-label="五条样例通知"></div>
           <textarea id="noticeText" rows="5" placeholder="把课程通知、作业要求贴在这里…"></textarea>
+          <div class="notice-file">
+            <input id="noticeFile" type="file" accept=".pdf,.docx,.txt" hidden>
+            <button id="chooseNoticeFile" type="button" class="secondary">选择文件</button>
+            <span id="noticeFileName" aria-live="polite"></span>
+            <button id="removeNoticeFile" type="button" class="danger" aria-label="移除通知文件" hidden>移除</button>
+          </div>
           <div class="primary-actions"><button id="parseNotice" class="primary">拆成清单</button><button id="clearNotice" class="secondary">清空</button></div>
           <div id="parseStatus" class="status-text" role="status"></div>
           <div id="checklist" class="checklist"></div>
@@ -53,6 +67,20 @@
           <button id="testNotification" class="secondary wide">测试系统通知</button>
           <button id="zoomPet" class="secondary wide">演示放大 / 还原</button>
         </section>
+        <section id="interactionView" class="view">
+          <div class="section-title"><h2>互动</h2></div>
+          <ul id="growthActions" class="growth-actions">
+            <li><button type="button" data-growth-action="welcome" data-tier="40" disabled>回来啦</button><span>40 档</span></li>
+            <li><button type="button" data-growth-action="sit" data-tier="60" disabled>陪我坐会儿</button><span>60 档</span></li>
+            <li><button type="button" data-growth-action="companion" data-tier="75" disabled>陪我做这项</button><span>75 档 · 前往清单</span></li>
+            <li><button type="button" data-growth-action="list_clear" data-tier="85" disabled>清单清空</button><span>85 档</span></li>
+            <li><button type="button" data-growth-action="bedtime" data-tier="95" disabled>晚安</button><span>95 档</span></li>
+            <li><button type="button" data-growth-action="anniversary" data-tier="100" disabled>相识纪念</button><span>100 档</span></li>
+          </ul>
+          <article id="anniversaryCard" class="anniversary-card" hidden>
+            <span>首次满分纪念卡</span><strong id="anniversaryDays"></strong><time id="anniversaryDate"></time>
+          </article>
+        </section>
         <section id="aboutView" class="view about-view">
           <h2>关于这只奶龙</h2>
           <p>一个角色、一个桌面角落。这里的清单和提醒都由本地功能完成。</p>
@@ -66,7 +94,7 @@
 
     <section id="bubble" class="bubble" data-expanded="0" aria-live="polite">
       <div id="bubbleDetail" class="bubble-detail" aria-hidden="true">
-        <div class="bubble-top"><span id="daysBadge">认识你的第 1 天</span><span id="stageText">初识</span></div>
+        <div class="bubble-top"><span id="daysBadge">相识天数加载中</span><span id="stageText"></span></div>
         <p id="bubbleText">我在这儿，今天的待办我帮你记着。</p>
         <small id="bubbleNote"></small>
         <div id="chatPanel" class="chat-panel">
@@ -88,6 +116,9 @@
     </section>
 
     <canvas id="petCanvas" class="pet-canvas" width="192" height="208" tabindex="0" role="button" aria-label="奶龙，单击打开清单，按住拖动；也可按回车打开"></canvas>
+    <div class="interaction-bubble" id="interactionBubble" role="status" hidden></div>
+    <div class="interaction-check" id="interactionCheck" aria-hidden="true" hidden>✓</div>
+    <div class="interaction-confetti" id="interactionConfetti" aria-hidden="true" hidden><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <div id="thought" class="thought" aria-hidden="true"><span>思考中</span><i></i><i></i><i></i></div>
     <section id="taskScene" class="task-scene" aria-hidden="true" hidden>
       <div class="task-scene-head"><i class="task-dot"></i><span id="taskSceneTitle">正在处理</span></div>

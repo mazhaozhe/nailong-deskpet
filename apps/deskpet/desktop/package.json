@@ -12,7 +12,7 @@
     "pack": "electron-builder --dir",
     "predist": "node scripts/assemble-runtime.mjs",
     "dist": "electron-builder --win nsis",
-    "test": "node --test ../../../tests/desktop/test_pet_drag.cjs ../../../tests/desktop/test_petex_drag.cjs ../../../tests/desktop/test_native_click.cjs ../../../tests/desktop/test_actions.cjs",
+    "test": "node --test ../../../tests/desktop/test_pet_drag.cjs ../../../tests/desktop/test_petex_drag.cjs ../../../tests/desktop/test_native_click.cjs ../../../tests/desktop/test_actions.cjs ../../../tests/desktop/test_installation.cjs ../../../tests/desktop/test_notice_renderer.cjs",
     "test:window": "electron ../../../tests/desktop/test_pet_drag_electron.cjs"
   },
   "devDependencies": {
@@ -32,6 +32,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "installation.js",
       "native-click.js",
       "native_mouse.py",
       "approval-dialog.html",
@@ -81,6 +82,7 @@
       "target": "nsis"
     },
     "nsis": {
+      "include": "installer/relationship.nsh",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,

@@ -48,7 +48,7 @@ _STAGE_CN = {
 class MemoryFacts:
     """一次闲聊要用到的全部真实事实（字段为空就表示「确实没有」，不许补）。"""
     days_known: int = 1
-    intimacy: int = 0
+    intimacy: float = 75
     stage_cn: str = "初识"
     pending: list[str] = field(default_factory=list)
     nearest_deadline: str = ""
@@ -72,7 +72,7 @@ def collect_facts(conn, user_id: str) -> MemoryFacts:
                    f"{first.deadline.strftime('%Y-%m-%d %H:%M')} 前")
 
     return MemoryFacts(
-        days_known=max(1, g.days_known),
+        days_known=g.days_known,
         intimacy=g.intimacy,
         stage_cn=_STAGE_CN.get(g.stage, "初识"),
         pending=[str(t.title) for t in pending][:6],
@@ -84,7 +84,7 @@ def render_memory_block(facts: MemoryFacts) -> str:
     """把人话版记忆写进 system prompt（空的部分明确写「没有」）。"""
     lines = [
         f"- 认识这个人第 {facts.days_known} 天（关系阶段：{facts.stage_cn}，"
-        f"亲密度 {facts.intimacy}）"
+        f"亲密度 {facts.intimacy:g}）"
     ]
     if facts.pending_count:
         titles = "、".join(f"「{t}」" for t in facts.pending)

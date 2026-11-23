@@ -103,6 +103,7 @@ class AgentModeRequest(BaseModel):
 class AgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=MAX_CHAT_CHARS)
     session_id: str = Field(..., min_length=1, max_length=64)
+    request_id: uuid.UUID | None = None
 
 
 class AgentDecision(BaseModel):
@@ -579,7 +580,8 @@ class AgentRuntime:
     # ------------------------------------------------------------------
     # 主入口：/agent/chat
     # ------------------------------------------------------------------
-    async def chat(self, uid: str, session_id: str, message: str) -> dict:
+    async def chat(self, uid: str, session_id: str, message: str,
+                   *, receipt: tuple[str, str | None] | None = None) -> dict:
         cap = capabilities.get("agent_chat")
         if cap is None or not cap.enabled:
             return self._degraded("能力 agent_chat 未登记或已停用")
@@ -629,12 +631,14 @@ class AgentRuntime:
                 kind_text = _strip_secrets_from_error(f"{type(exc).__name__}: {exc}")
                 _audit("agent_chat_error", thread_id=thread_id, error=kind_text)
                 return self._degraded(f"Agent 调用失败：{kind_text}")
-            return await self._finish_run(result, uid, thread_id)
+            return await self._finish_run(result, uid, thread_id, receipt)
         finally:
             self._busy.release()
 
-    async def _finish_run(self, result: dict, uid: str, thread_id: str) -> dict:
-        self._record_message_costs(list(result.get("messages", [])))
+    async def _finish_run(self, result: dict, uid: str, thread_id: str,
+                          receipt: tuple[str, str | None] | None = None) -> dict:
+        messages = list(result.get("messages", []))
+        self._record_message_costs(messages)
         hitl = self._drain_interrupts(result)
         if hitl is not None:
             approval_id = uuid.uuid4().hex
@@ -654,6 +658,7 @@ class AgentRuntime:
                 "thread_id": thread_id,
                 "created_mono": now,
                 "action_requests": requests,
+                "growth_receipt": receipt,
             }
             self._pending_by_thread[thread_id] = approval_id
             _audit("approval_requested", approval_id=approval_id,
@@ -672,7 +677,7 @@ class AgentRuntime:
         if not reply:
             return self._degraded(
                 "Agent 跑完但没有产出可见回复（可能触发了调用上限被强制收束）")
-        return {
+        response = {
             "status": "ok",
             "reply": reply,
             "source": "model",
@@ -680,6 +685,13 @@ class AgentRuntime:
             "network_used": "search_web" in tools_used,
             "model_calls": self.session_calls,
         }
+        # An AI tool request may contain introductory prose. Only a visible
+        # assistant turn at the end of the graph can award chat intimacy.
+        if receipt is not None and messages:
+            last = messages[-1]
+            if type(last).__name__ == "AIMessage" and not getattr(last, "tool_calls", None):
+                response["_growth_receipt"] = receipt
+        return response
 
     # ------------------------------------------------------------------
     # 审批：/agent/approve
@@ -740,7 +752,7 @@ class AgentRuntime:
                 return self._degraded(
                     "恢复执行失败：" + _strip_secrets_from_error(
                         f"{type(exc).__name__}: {exc}"))
-            return await self._finish_run(result, uid, book["thread_id"])
+            return await self._finish_run(result, uid, book["thread_id"], book.get("growth_receipt"))
         finally:
             self._busy.release()
 

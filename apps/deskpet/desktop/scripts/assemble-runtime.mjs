@@ -45,6 +45,23 @@ function readPyvenvHome(venvDir) {
   return line.split('=').slice(1).join('=').trim();
 }
 
+function findVisualCppRuntime() {
+  const programFiles = process.env['ProgramFiles(x86)'] || process.env.ProgramFiles;
+  if (!programFiles) return null;
+  const vswhere = path.join(programFiles, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+  if (!fs.existsSync(vswhere)) return null;
+
+  const arch = process.arch === 'ia32' ? 'x86' : process.arch;
+  const pattern = path.join('VC', 'Redist', 'MSVC', '*', arch, 'Microsoft.VC*.CRT', 'msvcp140.dll');
+  const candidates = execFileSync(vswhere, [
+    '-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Redist.14.Latest',
+    '-find', pattern, '-utf8'
+  ], { encoding: 'utf8' }).trim().split(/\r?\n/);
+  const newest = candidates.filter((file) => path.isAbsolute(file) && fs.existsSync(file))
+    .sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))[0];
+  return newest ? path.dirname(newest) : null;
+}
+
 function dirSize(dir) {
   let total = 0;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -71,12 +88,10 @@ const SITE_SKIP = [
   /^pkg_resources(-|$)/i,
   /^_distutils_hack(-|$)/i,
   /^wheel(-|$)/i,
-  // 只在开发机上装了、产品运行时零引用，合计约 186 MB，不进包：
-  //   pymupdf / pymupdf4llm / pymupdf_layout —— PDF 解析实际走 pypdf（apps/agent/runtime/uploads.py）；
-  //   onnxruntime —— pymupdf 的 layout 模型运行时，随 pymupdf 一起进来的；
+  // 只在开发机上装了、产品运行时零引用的依赖不进包：
+  //   pymupdf / pymupdf4llm / pymupdf_layout —— PDF 解析使用 pypdf 和 pypdfium2；
   //   matplotlib —— 只服务离线出图脚本（需求文档 gen_figs.py），产品内无 import。
   /^pymupdf/i,
-  /^onnxruntime(-|$)/i,
   /^matplotlib(-|$)/i
 ];
 
@@ -128,6 +143,19 @@ function main() {
   }
   log(`解释器文件 ${rootFiles.length} 个：${rootFiles.join(' ')}`);
 
+  // ONNX 和 OpenCV 也需要 C++ 标准库。使用 Visual Studio 提供的可分发文件。
+  const visualCppRuntime = findVisualCppRuntime();
+  if (visualCppRuntime) {
+    for (const entry of fs.readdirSync(visualCppRuntime, { withFileTypes: true })) {
+      if (entry.isFile() && /\.dll$/i.test(entry.name)) {
+        fs.copyFileSync(path.join(visualCppRuntime, entry.name), path.join(OUT, entry.name));
+      }
+    }
+    log(`已内置 Visual C++ 运行库：${visualCppRuntime}`);
+  } else {
+    log('未找到 Visual Studio 可分发运行库，解包运行 OCR 需要系统安装 Visual C++ 运行库。');
+  }
+
   // 2) DLLs/：扩展模块与它们的 dll 依赖，去掉测试用 pyd
   const dllsDir = path.join(baseDir, 'DLLs');
   if (!fs.existsSync(dllsDir)) fail('base 目录缺少 DLLs/');
@@ -147,18 +175,25 @@ function main() {
     fileFilter: (name) => !/\.(pyc|pyo)$/i.test(name)
   });
 
-  // 5) 自检：用刚拼好的解释器在干净 env 里 import 一遍
-  const probe = 'import sys, fastapi, uvicorn, docx, langchain, langgraph, sqlalchemy;'
-    + 'print("version=" + sys.version.split()[0]);'
-    + 'print("prefix=" + sys.prefix);'
-    + 'print("sqlite=" + __import__("sqlite3").sqlite_version)';
-  const env = { ...process.env, PYTHONPATH: '', PYTHONHOME: '', PYTHONDONTWRITEBYTECODE: '1' };
-  delete env.PYTHONPATH;
-  delete env.PYTHONHOME;
+  // 5) 自检：确认包内解释器能加载依赖，OCR 模型也完整保存在本地。
+  const probe = [
+    'import sqlite3, sys',
+    'from pathlib import Path',
+    'import fastapi, uvicorn, docx, langchain, langgraph, sqlalchemy',
+    'import onnxruntime, pypdf, pypdfium2, rapidocr',
+    'models = Path(rapidocr.__file__).with_name("models")',
+    'for name in ("PP-OCRv6_det_small.onnx", "PP-OCRv6_rec_small.onnx", "ch_ppocr_mobile_v2.0_cls_mobile.onnx"):',
+    '    assert (models / name).is_file(), f"Missing OCR model: {name}"',
+    'assert "CPUExecutionProvider" in onnxruntime.get_available_providers()',
+    'print("version=" + sys.version.split()[0])',
+    'print("prefix=" + sys.prefix)',
+    'print("sqlite=" + sqlite3.sqlite_version)',
+    'print("ocr=RapidOCR (ONNX CPU), models=3")'
+  ].join('\n');
   let probeOut = '';
   try {
-    probeOut = execFileSync(path.join(OUT, 'python.exe'), ['-c', probe], {
-      cwd: path.join(OUT, 'Lib'), env, encoding: 'utf8', timeout: 120000
+    probeOut = execFileSync(path.join(OUT, 'python.exe'), ['-I', '-B', '-c', probe], {
+      cwd: path.join(OUT, 'Lib'), encoding: 'utf8', timeout: 120000
     }).trim();
   } catch (error) {
     fail(`拼好的运行时 import 自检失败：${(error.stderr || error.message).toString().slice(0, 800)}`);
