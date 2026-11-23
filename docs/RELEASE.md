@@ -14,12 +14,12 @@ npm run dist --prefix apps/deskpet/desktop
 
 ## 已发布的 Windows 安装包
 
-从 [v1.0.0 Release](https://github.com/mazhaozhe/nailong-deskpet/releases/tag/v1.0.0) 下载 `Setup.1.0.0.exe`，双击安装。该附件对应此前构建，源代码中的本地 OCR 版需重新打包。
+下载 [本地 OCR 版 Windows x64 安装包](https://github.com/mazhaozhe/nailong-deskpet/releases/download/v1.0.0/Nailong-Deskpet-Setup-1.0.0-OCR-x64.exe)，双击安装。包内包含 Python、OCR 引擎和识别模型，规则模式可离线使用。
 
-- 已发布附件大小为 148,532,255 字节。可用 `Get-FileHash .\Setup.1.0.0.exe -Algorithm SHA256` 核对以下值。
-- SHA256 为 `70f7281451b884a5b559cb555fed24bc25538108506ee792865e5c36f7896c2b`。
+- 安装包大小为 225,718,581 字节（约 215 MiB），SHA256 为 `4dc9e0e24af16dfcf812f5c11aa06e9e4433c6d3138da04b655f04d934da5efc`。
 - 安装包未签名。下载或运行时可能出现 Windows 信誉提示，请先核对下载来源和哈希。
 - 业务数据写在 `%APPDATA%\nailong-deskpet-client\deskpet\`，卸载默认保留。
+- 旧安装包 `Setup.1.0.0.exe` 仍可从 [v1.0.0 Release](https://github.com/mazhaozhe/nailong-deskpet/releases/tag/v1.0.0) 获取。
 
 ## 奶龙图像素材与授权
 

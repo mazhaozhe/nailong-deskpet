@@ -19,6 +19,8 @@
 
 ## 二、快速开始（Windows / PowerShell）
 
+直接使用可下载 [Windows x64 安装包](docs/RELEASE.md#已发布的-windows-安装包)。从源码启动请在 PowerShell 中运行以下命令。
+
 ```powershell
 Set-Location '<项目目录>\apps\deskpet\desktop'
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
