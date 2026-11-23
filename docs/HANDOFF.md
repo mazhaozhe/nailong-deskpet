@@ -14,14 +14,11 @@
 - 测试：`tests/backend/`、`tests/desktop/`、`tests/agent/`、`tests/infrastructure/`。
 - 下节测试数字为 2026-11-07 实测基线，改动后以实际命令输出为准。
 
-## 0. 当前状态（2026-11-07）
+## 0. 当前状态
 
-- 阶段 1–5 已完成；此后增补了自由闲聊与可选的完整 Agent 模式，并下架了早期的小游戏模块。
-- 独立复测：`verify.py --level full` **21/22**（唯一未绿项是 `pytest_green`：273 passed + 6 failed，6 个失败全部来自 `tests/agent/test_registry.py` 中 import 路径未随目录重构同步，属测试代码自身，不影响运行）；接口契约冒烟 **34 PASS / 0 FAIL**；`npm test` **32/32**；桌面壳自检 `DESKTOP_SMOKE pass:true`（退出码 0）。
-- 现在能跑的是「透明置顶桌面小窗 + 规则版主流程 + 可选模型 / Agent 能力」，**还不是安装包**。
-- 阶段 6（博客 / PPT / 需求文档 / 答辩）、阶段 7（打包 exe + GitHub Release）**未开工**。
-- 仓库不含 `.env`、`.venv/`、`apps/deskpet/desktop/node_modules/`、`data/`，也不含任何预置或演示数据。
-- 已知不一致：`apps/deskpet/backend/tools_allowlist.py` 的文件头注释仍写「不构造 ReAct Agent、不注册任何工具」「不做通用问答 / 联网搜索」，那是**主线**的历史口径；Agent 模式启用后的实际行为以下方 §3 双轨说明为准。注释待后续顺手同步，不要据它改删功能。
+- 通知入口支持 PDF、DOCX 和 TXT。普通与 Agent 模式都先在本机提取文字和 OCR，清单保留来源，确认后写入待办。
+- 新安装以首次安装日期为相识起点，源码启动以首次使用为起点。相识天数按北京时间计算，亲密度由聊天与待办结算。
+- 已发布附件与当前源码的区别见 [发布说明](RELEASE.md)。
 
 ## 1. clone 后重建环境（Windows / PowerShell）
 
@@ -59,9 +56,7 @@ $env:NAIWA_SMOKE_TEST = '1'
 Remove-Item Env:NAIWA_SMOKE_TEST -ErrorAction SilentlyContinue
 ```
 
-判据：`full` 21/22 且唯一失败为上述 import 路径项、冒烟 34/0、真实 HTTP 全绿、`model_calls=0`、`DESKTOP_SMOKE pass:true`（初始态干净、13 组动作 / 74 帧、动态端口仅绑 `127.0.0.1`、渲染进程 / 命令行 / 日志三处明文 Key 零泄漏、关窗进托盘与系统通知正常）。把 6 处 import 同步后应回到 `full 22/22`。
-
-**注意**：现有验收集只覆盖阶段 1–5，**不检查 exe 在无 Python 的干净机器上能否双击启动**；阶段 7 的验收要另写，两者不能互相顶替。
+日常回归可单独运行 `pytest` 和 `npm test`。通知功能重点检查第 31 页混合 PDF、扫描件、Word 表格图片、两种拆解模式和确认写入。安装包需要另外验证。
 
 ## 3. 不许改的红线（代码级）
 
@@ -91,7 +86,6 @@ Remove-Item Env:NAIWA_SMOKE_TEST -ErrorAction SilentlyContinue
 
 **产品**
 - 每位使用者独立培养、从干净「认识你的第 1 天」开始；**禁止任何预置数据、演示故事或演示模式**。
-- 模拟 7/30/100 天只覆盖展示日期、不写脏真实首见日期。
 - 答辩演示只走本机真实状态三步：规则版主流程 → 记忆补报「还差什么」→ 托盘 + 系统通知；无需 Key / 联网，不演模拟天数、不放录屏。自由闲聊与 Agent 模式默认关闭，只在 PPT 与问答中说明。
 
 ## 4. 阶段 6 待办（文档与答辩）
@@ -100,18 +94,11 @@ Remove-Item Env:NAIWA_SMOKE_TEST -ErrorAction SilentlyContinue
 - 三步演示脚本与彩排 ≤4 分钟，全程本机真实养出的历史。
 - 被问到「智能体体现在哪」时，分两层讲清楚：主线是单一入口 + 循环 ≤2 + 工具表 0 + 固定 JSON 的收敛决策；第四态是完整工具链 + 审批 + 域名白名单 + 默认关闭。清单是智能体的**任务出口**，不是智能体本体；不要当场打开别的程序。
 
-## 5. 阶段 7 待办（打包 exe，P0 处方）
+## 5. Windows 打包与验收
 
-**现状问题**：`apps/deskpet/desktop/package.json` 的 `build.files` 只含桌面端文件（主进程、preload、原生点击脚本、renderer、素材、petex），尚未包含 `apps/deskpet/backend/`、`apps/agent/`、`infrastructure/`、`config/` 与 Python 运行时；`ROOT` 和 `.venv` 查找仍面向源码目录。此外 `storage.py` 的 `DB_PATH` 相对启动目录，装到只读安装目录会写不进。
+运行 `npm run dist --prefix apps/deskpet/desktop`。包内 Python 运行时包含 OCR 引擎和模型，业务数据落在 Electron 的用户数据目录。构建产物和运行时目录保留在本地。
 
-要做的：
-
-1. 把 `apps/deskpet/backend/`、`apps/agent/`、`infrastructure/`、`config/`、Python 运行时纳入 `build.files` 或 `extraResources`；**同时改路径解析**，让打包后的 `ROOT` / `PYTHON` / `PYTHONPATH` 指向解包后的真实位置，不能只改配置表；业务库改落可写的用户数据目录。
-2. 显式排除 `.env`（真实 Key），解包后全局搜 Key 字样；验证启动链不 `load_dotenv`。
-3. 同步 `tests/agent/test_registry.py` 的 6 处 import 路径，让 `full` 回到 22/22。
-4. 另写一套阶段 7 验收：**无 Python 的干净机器**双击安装 → 断网走完规则版主流程 → 包里零 Key → 托盘 / 系统通知正常 → 三步演示 ≤4 分钟。
-5. 打包前跑一次 `verify.py --level full`；打包后在干净机器实测。两者都要有证据，不能互相顶替。
-6. 发布后补 Release 说明与本机真实截图 / GIF。
+本轮已在本机解包验证混合 PDF、扫描件、Word 图片和无 Key 回退。正式发布前还需在全新 Windows 环境测试安装、启动和离线拆解。发布附件与 SHA256 记录在 [发布说明](RELEASE.md)。
 
 ## 6. 交付与协作
 
